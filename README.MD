@@ -1,21 +1,64 @@
-# 贝尔XG-040G-MD一键刷入 使用教程
-请使用Linux环境运行 不支持windows运行
-WSL环境也可以
-需要安装telnetlib3和nc coreutils软件包中已经包含了 一般发行版都用coreutils
+# 贝尔XG-040G-MD 一键刷入使用教程
+
+## 系统要求
+- **请使用 Linux 环境运行**，不支持 Windows
+- WSL 环境也可以运行
+
+## 前置依赖安装
+
+### Python 包
+```bash
 pip install telnetlib3
-如果没有，可以单独安装netcat
-## archlinux
+```
+
+### 系统软件包
+需要安装 `nc` (netcat)，一般包含在 coreutils 中：
+
+#### Arch Linux
+```bash
 pacman -Sy netcat
-## ubuntu/debian
+```
+
+#### Ubuntu/Debian
+```bash
 apt install netcat
-## centos/fedora
+```
+
+#### CentOS/Fedora
+```bash
 yum install netcat
+# 或者对于较新版本：
+# dnf install netcat
+```
 
-请先重置路由器 按住reset 20秒以上
-然后浏览器使用超级管理员帐号登录
-使用web管理员 CMCCAdmin aDm8H%MdA 登录系统，开启文件共享ftp
-然后根据你的光猫来修改脚本里的配置
-然后运行flash.py
+## 准备工作
 
-uboot文件请从nwrt网站的网盘获取
-https://nwrt.kuroneko.host/
+1. **重置路由器**
+   - 按住 reset 键 20 秒以上，将设备恢复至出厂设置
+
+2. **登录系统**
+   - 使用浏览器登录光猫管理界面
+   - **超级管理员账号**：`CMCCAdmin`
+   - **密码**：`aDm8H%MdA`
+
+3. **开启文件共享**
+   - 登录后，在系统中开启 FTP 文件共享功能
+
+## 配置和刷入
+
+1. **修改脚本配置**
+   - 根据你的光猫型号，修改 `flash.py` 脚本中的相关配置
+
+2. **获取 uboot 文件**
+   - 请从 NWRT 网站的网盘获取对应的 uboot 文件
+   - 网站地址：https://nwrt.kuroneko.host/
+
+3. **运行刷入脚本**
+   ```bash
+   python flash.py
+   ```
+
+## 注意事项
+- 请确保在操作前已备份重要数据
+- 刷机过程请勿断电，避免设备变砖
+- 如遇问题，请参考 NWRT 网站的相关文档
