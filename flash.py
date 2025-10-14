@@ -15,10 +15,9 @@ USERNAME = "useradmin"
 PASSWORD = "h54d*58g"
 FTP_USER = "useradmin_ftp"  # 请根据光猫铭牌确认
 
-UBOOT_FILE = "./tcboot.bin"
+UBOOT_FILE = "tcboot.bin"
 EXPECTED_SHA512 = "142ad1ebcc825e58223e5c28de0aee853d96a05447bda1af9fc78dd3f5eab0e10aec2626bd4b18ce7d8137b7f6943726734bcb38ce06d75ea86b45ccf6969610"  # ←←← 必须填写正确的 SHA512！
-
-BACKUP_DIR = f"./backup_{time.strftime('%Y%m%d_%H%M%S')}"
+BACKUP_DIR = "backup_{time.strftime('%Y%m%d_%H%M%S')}"
 LOCAL_NC_PORT = 8081
 REMOTE_NC_PORT = 9999
 TIMEOUT = 15
@@ -57,6 +56,8 @@ def wait_for(tn, prompt, timeout=TIMEOUT):
         return False
 
 def main():
+    current_dir = os.path.dirname(__file__)
+    os.chdir(current_dir)
     # === 1. 验证 U-Boot 文件 ===
     if not os.path.isfile(UBOOT_FILE):
         print(f"[!] 找不到 U-Boot 文件: {UBOOT_FILE}")
@@ -95,13 +96,19 @@ def main():
     wait_for(tn, "Password:")
     tn.write(PASSWORD.encode() + b"\n")
     print("[✓] 密码已输入")
-    wait_for(tn, "$")
+    ret = wait_for(tn, "$")
+    if not ret:
+        print("[!] 登录失败")
+        sys.exit(1)
     print("[✓] 登录成功")
     # 切换 FTP 用户
     tn.write(f"su {FTP_USER}\n".encode())
     wait_for(tn, "Password:")
     tn.write(PASSWORD.encode() + b"\n")
-    wait_for(tn, "#")
+    ret = wait_for(tn, "#")
+    if not ret:
+        print("[!] 切换 FTP 用户失败，无法获得root权限。")
+        sys.exit(1)
     print("[✓] 切换 FTP 用户成功")
 
     # 获取 root

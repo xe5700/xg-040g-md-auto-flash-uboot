@@ -1,6 +1,7 @@
 # 贝尔XG-040G-MD一键刷入 使用教程
-请使用Linux环境运行 不支持windows运行
-WSL环境也可以
+请使用Linux环境运行 WIN安装netcat也许可以运行 nmap安装后自带netcat包
+WSL或者MSYS2环境也可以
+非原生linux环境需要解除85行的注释并且注释掉83行
 需要安装telnetlib3和nc coreutils软件包中已经包含了 一般发行版都用coreutils
 pip install telnetlib3
 如果没有，可以单独安装netcat
