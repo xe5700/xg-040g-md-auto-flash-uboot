@@ -366,3 +366,14 @@ su user_ftp                     → Password: 输入 j3ba73@8
 - **已验证机型**：`XG-040G-MD` 和 `XG-140G-MD` 两台均实测通过；
   **电信 TF 机型未验证，应该用不了**，其他型号请自行判断
 - 如遇问题，请参考 NWRT 网站的相关文档
+
+## 致谢 / Acknowledgements
+
+本项目使用了 **billion-context** —— 一个面向小上下文窗口的上下文压缩插件，
+兼顾省 token 与超长会话；其内核为 **acp-kernel**。
+
+- billion-context：<https://github.com/ranxianglei/billion-context>
+- acp-kernel：<https://github.com/ranxianglei/acp-kernel>
+
+两者均采用 MIT 许可，并附有「产品出处标注」附加条款；
+本页即为该条款所要求的署名位置。
