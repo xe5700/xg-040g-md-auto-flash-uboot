@@ -67,12 +67,36 @@ class LogRedirector:
         pass
 
 
+def _set_window_icon(root):
+    """给窗口设置标题栏/任务栏图标。
+
+    优先用 icon.png（tkinter 的 iconphoto 支持 PNG，跨平台且不需要 Pillow）；
+    Windows 下再补一次 iconbitmap(icon.ico)，因为部分环境下任务栏只认 .ico。
+    两者都找不到就静默跳过 —— 图标只是外观，不能因此让程序起不来。
+    """
+    png = find_resource("icon.png")
+    if png:
+        try:
+            # 用 PhotoImage 保持引用：不保存会被 GC 掉，图标随即消失
+            root._icon_img = tk.PhotoImage(file=png)
+            root.iconphoto(True, root._icon_img)
+        except Exception:
+            pass
+    ico = find_resource("icon.ico")
+    if ico:
+        try:
+            root.iconbitmap(ico)
+        except Exception:
+            pass
+
+
 class App:
     def __init__(self, root):
         self.root = root
         self.root.title(APP_TITLE)
         self.root.geometry("1000x820")
         self.root.minsize(900, 760)
+        _set_window_icon(self.root)
 
         self.log_queue = queue.Queue()
         self.worker = None
@@ -112,15 +136,15 @@ class App:
              "光猫的管理地址，默认 192.168.1.1"),
             ("telnet", "username", "铭牌用户账号", False,
              "光猫底部铭牌上的用户账号（本机型为 user，不同型号可能不同）"),
-            ("telnet", "password", "铭牌用户密码", True,
+            ("telnet", "password", "铭牌用户密码", False,
              "光猫底部铭牌上的用户密码；telnet 登录用它"),
             ("telnet", "su_user", "提权账号（su）", False,
              "自动填成「铭牌用户账号_ftp」，即拿到 root 的账号"),
-            ("telnet", "root_password", "提权密码（留空=同上）", True,
+            ("telnet", "root_password", "提权密码（留空=同上）", False,
              "留空表示与「铭牌用户密码」相同"),
             ("super", "username", "网页超级账号", False,
              "登录管理网页用的超级账号，默认 CMCCAdmin"),
-            ("super", "password", "网页超级密码", True,
+            ("super", "password", "网页超级密码", False,
              "恢复出厂后的默认超级密码，用于自动开启 Telnet / FTP"),
         ]
         for r, (section, key, label, secret, hint) in enumerate(rows):

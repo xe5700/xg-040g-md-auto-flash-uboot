@@ -1,16 +1,26 @@
+# 备份产物（体积大、含设备私有数据）
 backup_*
+out/
+
+# 运行时生成
 __pycache__/
 config.ini
 dist/
 build/
+
+# 打包工具链：Windows Python 安装包 + wine 前缀。
+# 安装包不删（重新下载慢），只是不入库。
 _winbuild/
+
+# 测试/临时文件
 _shots/
 _reboot_test*.log
 _reboot_test.py
 _gui_smoke.py
-_devmgmt.html
-.playwright-mcp
 _test_cfg_preserve.py
 _test_verify_loop.py
-backup_*
-out
+_devmgmt.html
+.playwright-mcp
+
+# 恩山发帖草稿（含个人下载链接，不入库）
+恩山发帖.md

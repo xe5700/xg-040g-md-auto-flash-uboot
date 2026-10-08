@@ -8,6 +8,10 @@
 python3 gui.py
 ```
 
+界面长这样：
+
+![应用截图](应用截图.png)
+
 界面分四块：
 
 1. **顶部提示**——常驻的黄色提示，说明使用前要恢复出厂设置（见下文）。
@@ -64,7 +68,8 @@ allow_flash = false
 
 注意：
 - exe 是 64 位 Windows 程序（Win7 及以上）；
-- 刷机所需的 `tcboot.bin` 必须放在 exe 同目录，程序不会自带；
+- `tcboot.bin` **已内置在 exe 里**，开箱即用；想换别的版本，把文件放到
+  exe 同目录即可（同目录优先于内置副本）；
 - 首次运行若被 SmartScreen 拦截，选「更多信息 → 仍要运行」即可（程序未做代码签名）。
 
 ### exe 自检（排查缺依赖）
@@ -175,8 +180,18 @@ python3 flash.py --reboot          # 只重启光猫（清掉网页会话 / teln
      且 `su user_ftp` 的密码**就是** telnet 密码（`ROOT_PASSWORD = PASSWORD`）
 
 2. **获取 uboot 文件**
-   - 请从 NWRT 网站的网盘获取对应的 uboot 文件
+   - `tcboot.bin` 来自 **NWRT**——是 nwrt 专门为这款光猫开发的 tcboot
    - 网站地址：https://nwrt.kuroneko.host/
+   - 刷完 tcboot 重启后，可以进 tcboot 换成更现代化的新 U-Boot：
+     - 推荐 **loong1996 的 web U-Boot**：
+       https://github.com/Loong1996/ImmortalWrt-Airoha
+     - **ponwrt** 也兼容，可直接刷
+   - 刷 QWRT 有两条路线，别搞混：
+     - **tcboot 直接刷 QWRT**：一步到位，不需要拆分；
+     - **刷到 webuboot / uboot-an758x 再上 QWRT**：需要把 QWRT
+       **拆分成两个包分别刷入**，见
+       https://github.com/xe5700/qwrt_for_uboot-an758x
+       （uboot-an758x 本体：https://github.com/pbs05/uboot-an758x）
 
 3. **运行刷入脚本**
    ```bash
@@ -348,4 +363,6 @@ su user_ftp                     → Password: 输入 j3ba73@8
 - 请确保在操作前已备份重要数据
 - 刷机过程请勿断电，避免设备变砖
 - 建议先跑 `--mode backup` 确认流程通畅、拿到完整备份，再考虑 `--mode flash`
+- **已验证机型**：`XG-040G-MD` 和 `XG-140G-MD` 两台均实测通过；
+  **电信 TF 机型未验证，应该用不了**，其他型号请自行判断
 - 如遇问题，请参考 NWRT 网站的相关文档

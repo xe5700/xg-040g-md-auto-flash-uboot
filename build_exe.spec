@@ -26,6 +26,13 @@ datas = [
 # tcboot.bin 是可选的：存在就一起打包，作为「找不到外部文件」时的兜底
 if os.path.isfile("tcboot.bin"):
     datas.append(("tcboot.bin", "."))
+# icon.png 是窗口图标（tkinter 用）；exe 文件本身的图标用下面的 icon.ico。
+# 两个都带上：ico 管资源管理器/快捷方式/任务栏，png 管运行时的窗口标题栏。
+# 注意 ico 也要进 datas —— EXE(icon=...) 只把它写进 exe 的资源段，
+# 那是给 Windows 看的，运行时 find_resource("icon.ico") 在解包目录里找不到它。
+for _icon in ("icon.png", "icon.ico"):
+    if os.path.isfile(_icon):
+        datas.append((_icon, "."))
 
 # flash.py 动态加载 → 它内部的 import 必须手工声明。
 # 下面这些是 flash.py 实际用到的模块（stdlib 里 PyInstaller 不一定全收）。
@@ -87,4 +94,6 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    # exe 文件自身的图标（资源管理器 / 快捷方式 / 任务栏用这个）
+    icon="icon.ico" if os.path.isfile("icon.ico") else None,
 )
