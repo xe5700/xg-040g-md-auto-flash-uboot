@@ -1,2 +1,16 @@
 backup_*
-tcboot.bin
+__pycache__/
+config.ini
+dist/
+build/
+_winbuild/
+_shots/
+_reboot_test*.log
+_reboot_test.py
+_gui_smoke.py
+_devmgmt.html
+.playwright-mcp
+_test_cfg_preserve.py
+_test_verify_loop.py
+backup_*
+out
