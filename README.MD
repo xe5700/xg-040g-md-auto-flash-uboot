@@ -689,6 +689,12 @@ mtd1: 00040000 00020000 "romfile"
 
 ## 备份清单与跳过逻辑
 
+本工具**同样能备份完整固件**，不只是为了刷机前留个后路：`--mode backup`
+会把设备 `/proc/mtd` 里的全部分区原样 dump 到电脑上（贝尔 17 个、烽火 17 个，
+含 bootloader、kernel、rootfs、config、factory 等），每个分区都有大小与
+SHA256 校验，产物可以直接用 `dd` 写回去或者拿 U-Boot 的工具链解析。
+烽火还会额外生成一份 OpenWrt 用的 1 MiB `factory-1m.bin`（见上文）。
+
 每次备份完成后，脚本会在备份目录里写一份 `device.json`：
 
 ```json
