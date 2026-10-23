@@ -357,6 +357,24 @@ class App:
             text="刷写前请确认已按上方提示恢复出厂设置；点击后会弹出确认框。")
         self.flash_note.pack(anchor="w", pady=(6, 0))
 
+        # ===== 机型不匹配警告（MF 已实测变砖，TF 未验证）=====
+        # 用户明确要求：页面上要提醒，并且代码里要拦。
+        # 这里只是「提醒」；真正的硬拦截在 flash.py 的
+        # check_uboot_flash_allowed()，按设备自报的 ModelName 判断。
+        mf_warn = tk.Frame(flashbox, bg="#fdecea",
+                           highlightbackground="#d93025", highlightthickness=2)
+        mf_warn.pack(fill="x", pady=(8, 0))
+        tk.Label(
+            mf_warn, bg="#fdecea", fg="#a50e0e", justify="left", anchor="w",
+            wraplength=880, font=("", 9, "bold"),
+            text="⚠️ 只适用于贝尔 XG-040G-MD / XG-140G-MD（移动版，AN7581）\n"
+                 "已确认：XG-040G-MF 刷入 tcboot.bin 会直接变砖，"
+                 "只能拆机接串口进 XMODEM 救砖。\n"
+                 "XG-040G-TF 未验证，风险自担。\n"
+                 "原因：MF / TF 都是 AN7583 芯片，和 tcboot.bin 对应的 AN7581 不是同一代。\n"
+                 "程序会在刷写前读取设备机型名，MF 机型会被直接拒绝。"
+        ).pack(fill="x", padx=10, pady=8)
+
     # ---------- 烽火 tab ----------
     def _build_fh_tab(self, outer):
         self.fh_tip = self._tip_bar(
@@ -1125,6 +1143,59 @@ class App:
         else:
             self.btn_flash.configure(state="disabled")
 
+    def _known_device_identity(self):
+        """尽量在不连设备的情况下猜出「这台机器是什么型号」，返回 (型号名, 物料号)。
+
+        数据来源优先级：
+          1. 最近一次备份目录里的 `device.json`（本工具自己写的，字段可靠）
+          2. 都没有 → 返回 ("", "")，由调用方按「未知机型」处理
+
+        为什么不去连设备实时读：`on_flash` 里连设备要走完整个 telnet + su 流程，
+        等读到机型名时用户已经点了「确认刷写」——太晚了。而备份是**刷机前
+        必然做过**的一步（run_flow 里备份在刷写之前），所以这里读旧备份
+        既快又几乎总能命中。
+
+        真正的硬拦截仍在 flash.py：那边用设备**实时**上报的 ModelName 判断，
+        就算这里猜错也绕不过去。
+        """
+        import glob
+        import json
+
+        try:
+            base = _resource_dir()
+            pats = [os.path.join(base, "backup_*", "device.json"),
+                    os.path.join(base, "backup_*", "*", "device.json")]
+            cands = []
+            for pat in pats:
+                cands.extend(glob.glob(pat))
+            # 按修改时间倒序，取最新那份（用户最近刷的机器最可能是现在这台）
+            cands.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+            for path in cands[:8]:
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                except (OSError, ValueError):
+                    continue
+                dev = data.get("device") or data
+                # 只认设备**真实自报**的型号。两个坑都要防：
+                #   1. 新版会把档案补位名单独记在 ModelNameFromProfile，
+                #      ModelName 只放真实值 —— 直接用即可。
+                #   2. 旧版备份把档案名（「烽火 HG5585F CT（电信版）」这种
+                #      中文描述）写进了 ModelName。那不是设备型号，拿去比对
+                #      黑名单永远不匹配，等于白拦。所以这里只接受「像设备
+                #      型号」的值：纯 ASCII 字母数字加连字符。
+                model = str(dev.get("ModelName") or "").strip()
+                if model and not all(
+                        c.isascii() and (c.isalnum() or c in "-_ ")
+                        for c in model):
+                    model = ""
+                part = str(dev.get("PartNumber") or "").strip()
+                if model or part:
+                    return model, part
+        except Exception:  # noqa: BLE001
+            pass
+        return "", ""
+
     def on_flash(self):
         # 恢复出厂设置的提醒放在 tab 顶部的固定提示里（不跟刷机按钮绑定）。
         # 这里只做刷机本身该做的确认。
@@ -1147,12 +1218,31 @@ class App:
             return
         flash.UBOOT_FILE = uboot
 
+        # === 机型预检（能提前判断就提前拦，别等跑到一半才中止）===
+        # 优先用最近一次备份里的 device.json（不用连设备，快且零风险）；
+        # 没有备份就让用户确认「我知道我这台是 MD」。真正的硬拦截仍在
+        # flash.py：那边用设备实时上报的 ModelName 判断，绕不过去。
+        known_model, known_part = self._known_device_identity()
+        allowed, reason, warn_only = flash.check_uboot_flash_allowed(
+            known_model, known_part)
+        if not allowed:
+            messagebox.showerror(APP_TITLE, f"已拒绝刷写\n\n{reason}")
+            self.log_line(f"[✗] 已拒绝刷写（机型 {known_model}）：未做任何写入。\n")
+            return
+        if warn_only:
+            if not messagebox.askyesno(
+                    APP_TITLE, f"机型未验证\n\n{reason}\n\n仍要继续吗？"):
+                self.log_line("[*] 已取消刷机（未做任何写入）。\n")
+                return
+
         # 最终确认
         if not messagebox.askyesno(
                 APP_TITLE,
                 "即将刷写 U-Boot\n\n"
                 f"文件：{uboot}（{size} 字节）\n"
                 "目标：/dev/mtdblock0\n\n"
+                "⚠️ 写入仅适配 XG-040G-MD / XG-140G-MD（移动版）！\n"
+                "⚠️ XG-040G-MF 刷入会变砖，已有人踩过！\n"
                 "⚠️ 写入不可逆，断电或写错会导致设备变砖！\n"
                 "⚠️ 刷写过程中绝对不能断电！\n"
                 "程序会先做全分区备份，但仍请确认已备份重要数据。\n\n"
@@ -1310,7 +1400,11 @@ class App:
                 "  · 读取设备信息（型号 / SN / MAC / 固件版本）\n"
                 "  · 下载 /var/tel_passwd、/fhdata/pre_usrconfig_conf 等密码相关文件\n"
                 "  · 从里面切出密文片段，逐个试本地密钥并记录结果\n"
-                "  · 把本工具内置的密钥表一并写进去\n\n"
+                "  · 把本工具内置的密钥表一并写进去\n"
+                "  · 取回设备上的解密库 libfhcfg.so / libfhcrypto_new.so\n"
+                "    （含 AES 工作密钥的那几个，作者换固件后靠它重新抓密钥）\n\n"
+                "最后一步要登录 telnet：会先把 so 复制到 /var 再下载，\n"
+                "下完立刻删除临时副本。telnet 登不上就跳过，其余照常。\n\n"
                 "⚠️ 包里有 MAC、PON SN、整机 SN、telnet 密码哈希，\n"
                 "   可能还有 Wi-Fi 密码等配置。只发给作者，不要公开贴到论坛。\n\n"
                 "确定开始吗？"):
@@ -1442,7 +1536,11 @@ def self_test():
             raise RuntimeError("从 UCI 文本里切不出密文（切分逻辑失效）")
         if frags[0].get("field") != "TelnetPassword":
             raise RuntimeError(f"字段名识别错：{frags[0].get('field')!r}")
-        print(f"  [✓] fhreport（诊断包可用，密文切分 + 字段识别正常）")
+        # 诊断包要带设备的解密 so，SO_FILES 空了就说明这功能被删残了
+        if not getattr(fhreport, "SO_FILES", ()):
+            raise RuntimeError("SO_FILES 是空的，诊断包不会带解密 so")
+        print(f"  [✓] fhreport（诊断包可用，密文切分 + 字段识别正常，"
+              f"带 {len(fhreport.SO_FILES)} 个解密 so）")
     except Exception as e:  # noqa: BLE001
         problems.append(f"缺模块 fhreport: {type(e).__name__}: {e}")
         print(f"  [✗] fhreport — {e}")

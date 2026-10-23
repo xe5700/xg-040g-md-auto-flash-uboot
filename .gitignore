@@ -47,6 +47,10 @@ _telsu.tar.gz
 _*.py
 _*.log
 
+# 真机探测 / 设备桩编译的临时工作区（_dev 里是 fhdec 桩源码，_live 是 telnet 小工具）
+_dev/
+_live/
+
 # CI / 本地发版时生成的 Release 说明与更新日志片段
 _release_notes.md
 _changelog.md
@@ -73,3 +77,4 @@ _recover/
 # 诊断包：含设备 MAC / SN / 密码哈希，绝不能提交
 fh_report_*.zip
 _report_tmp/
+HANDOFF.md

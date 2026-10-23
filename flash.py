@@ -9,7 +9,7 @@
     python3 flash.py --mode flash         # 开启 Telnet+FTP + 备份 + 刷写 U-Boot（危险）
     python3 flash.py --mode flash -y      # 跳过刷写前的 YES 二次确认
     python3 flash.py --mode stock2ubi     # 上传并后台运行 an758x-stock2ubi（网页里刷）
-    python3 flash.py --mode report        # 导出诊断包 zip（telnet 密码解不开时发给作者）
+    python3 flash.py --mode report        # 导出诊断包 zip（含设备解密 so，发给作者）
     python3 flash.py --no-enable-telnet   # 假定 Telnet 已手动开启，不走网页步骤
     python3 flash.py --no-enable-ftp      # 假定 FTP 已手动开启，不走网页步骤
     python3 flash.py --force-backup       # 即使已有同一台设备的完整备份也重新备份
@@ -213,6 +213,64 @@ DEVICE_MANIFEST = "device.json"  # 备份清单文件名
 
 UBOOT_FILE = "tcboot.bin"
 EXPECTED_SHA512 = "5d46e47c40967fcb0955c42e09ce2e610cf57059c33a62eb959ee1f534f86bd1fa662f03473a1785df3438f47d62db0eb71ef7c4aaa949a9ff94175966c2fb17"  # ←←← 必须填写正确的 SHA512！
+
+# --- 机型黑名单：这些机型**绝对不许**刷 tcboot.bin ---
+#
+# 为什么要按机型拦，而不是只在界面上写提醒：
+# tcboot.bin 是**贝尔 XG-040G-MD / XG-140G-MD（移动版）**的 U-Boot，它跟
+# mtd0 的布局、DDR 参数、启动方式绑定。同系列但不同运营商版本的机器
+# （MF = 联通/电信版、TF = 另一版）外观、网页、分区表都很像，用户看教程
+# 很容易当成同一台机器去刷 —— 实测已经有用户用本工具给 **XG-040G-MF**
+# 刷入 tcboot 后**直接变砖**，只能拆机接串口进 XMODEM 救砖。
+#
+# ## 根因是芯片就不是同一颗（这条最能解释为什么必砖）
+#   MD / XG-140G-MD : econet **EN7581**（tcboot.bin 就是给它编的）
+#   MF / TF         : **AN7583**  ← 芯片代次不同，U-Boot 二进制根本不通用
+# 证据：用户提供的 MF 整机备份 all.bin 里 `AN7583` 出现 35 次
+# （`AN7583_XPON_PMA`、`AN7583_SERDES` 等），`en7581` 一次都没有。
+# 所以这不是「同芯片不同版本调参」的问题，换参数救不回来 —— 只能整块换 U-Boot。
+#
+# 所以这里按设备自报的 `cfgcli -g InternetGatewayDevice.DeviceInfo.ModelName`
+# 做硬拦截：命中黑名单就**在写入前中止**，一个字节都不写。
+#
+# 匹配方式见 _norm_model_name()：去分隔符、转大写后再比，所以
+# `XG-040G-MF` / `xg040gmf` / `XG 040G MF` 都能命中，不会因为写法差异漏放。
+UBOOT_FLASH_BLOCKED_MODELS = (
+    "XG-040G-MF",   # 实测刷 tcboot 必砖（已有人踩过，只能 XMODEM 救）
+)
+
+# 没验证过的机型：**不拦，但每次刷写前都警告**。
+# 为什么和黑名单分开：把没验证过的机型直接判死会挡住本来能用的机器，
+# 但一声不吭地让它刷又可能复制 MF 的悲剧。所以走「明确告知 + 要求确认」。
+UBOOT_FLASH_UNTESTED_MODELS = (
+    # TF 和 MF 是**同一颗 AN7583**，只是运营商版本不同；MF 已经实测刷 tcboot
+    # 必砖，TF 自然没有理由能例外。只是目前没人真的拿 TF 试过，所以按
+    # 「未验证 → 警告」处理，而不是像 MF 那样直接判死。
+    # 谁要是真在 TF 上验证了（无论成败），把结论补进这里和 HANDOFF 4.9。
+    "XG-040G-TF",
+)
+
+# PartNumber 黑名单 —— 机型名读不到时的**第二道独立证据**。
+#
+# 为什么需要它：`ModelName` 依赖 cfgcli / TR069 数据模型，个别固件上那个
+# 节点可能读不出来（返回空或 ******）。只靠一个字段判定，读不到就等于
+# 没有防护。而 PartNumber 是**板级物料号**，烧在工厂区、开机就报，
+# 比 ModelName 更底层也更稳定。
+#
+# 实测（用户提供的 XG-040G-MF 整机备份 all.bin）：
+#   MF: SN=NBELb4998639  MAC=80:49:bf:1c:ad:c4
+#       PartNumber=3TN01058AAAA  DeviceID=XG-040G-MF  model=XG-040G-MF
+# 注意 PartNumber 可能随批次变（3TN01058AAAA 只是这一批），所以它**只作为
+# 辅助**：命中就拦；没命中仍要看 ModelName，不能反过来当放行依据。
+UBOOT_FLASH_BLOCKED_PARTNUMBERS = (
+    "3TN01058AAAA",
+)
+
+# tcboot.bin 明确适配的机型（只用于提示文案，不参与放行判断）
+UBOOT_FLASH_KNOWN_GOOD = (
+    "XG-040G-MD",
+    "XG-140G-MD",
+)
 
 # --- 刷写后的回读校验 ---
 # 实测：dd 写入 /dev/mtdblock0 后立刻 `dd if=/dev/mtd0` 读回来的常常还是旧数据，
@@ -2213,6 +2271,19 @@ def device_has_download(tn) -> bool:
     return device_has_curl(tn) or device_has_wget(tn)
 
 
+def _display_model_name(info):
+    """给日志/备份清单用的机型显示名。
+
+    优先级：设备真实自报的 ModelName > 机型档案的补位名 > 未知。
+    单独抽出来是因为这两者**语义不同**：ModelName 是设备说的（可用于
+    机型闸判断），ModelNameFromProfile 是我们按用户选的机型猜的（只能显示）。
+    混用会让刷机前的黑名单判断失效，详见 collect_device_info 里的注释。
+    """
+    info = info or {}
+    return (info.get("ModelName") or info.get("ModelNameFromProfile")
+            or "未知")
+
+
 def collect_device_info(tn):
     """从设备读取机型 / 序列号 / 软硬件版本等信息（需 root）。
 
@@ -2292,6 +2363,9 @@ def collect_device_info(tn):
     _one_ok(f"cfgcli -g {di}HardwareVersion", "HardwareVersion")
     _one_ok(f"cfgcli -g {di}SoftwareVersion", "SoftwareVersion")
     _one_ok(f"cfgcli -g {di}ProductClass", "ProductClass")
+    # PartNumber 是机型判定的第二个独立证据（MF 实测 3TN01058AAAA）。
+    # 有些固件没有这个节点，取不到就算了，不影响 ModelName 那条主证据。
+    _one_ok(f"cfgcli -g {di}PartNumber", "PartNumber")
     _one("cat /sys/class/net/br0/address", "MacAddress")
 
     # 烽火 HG5585F 上**没有 cfgcli**，上面这些全部拿不到，退回设备自带文件。
@@ -2346,8 +2420,17 @@ def collect_device_info(tn):
             # 烽火的 GetDevInfo 不返回机型名，固件里 hostname 又是 (none)，
             # 所以用机型档案的名字补上 —— 否则 device.json 里 ModelName 为空，
             # 备份清单打印出来是「设备信息: 未知 / SN xxx」，很难认。
+            #
+            # ⚠️ 但这只是**显示用**的补位，绝不能当成设备真实型号：
+            # 机型档案名是「烽火 HG5585F CT（电信版）」这种中文描述，
+            # 跟设备自报的 `XG-040G-MF` 完全不是一回事。刷机前的机型闸
+            # （check_uboot_flash_allowed）要拿真实型号比对，如果这里把
+            # 档案名写进 ModelName，闸就会拿到一个永远不匹配的字符串，
+            # 等于把防护废掉。所以补位值另外记在 ModelNameFromProfile 里，
+            # 闸只认 ModelName，读不到就是空 → 走「未知机型，只警告」。
             if not info.get("ModelName") and MODEL is not None:
-                info["ModelName"] = getattr(MODEL, "name", "") or MODEL.key
+                info["ModelNameFromProfile"] = (
+                    getattr(MODEL, "name", "") or MODEL.key)
             print(f"[*] 已通过 fh_tool GetDevInfo 读取设备信息（SN {info.get('SerialNumber', '未知')}）")
         except Exception as e:  # noqa: BLE001
             print(f"[*] fh_tool GetDevInfo 读取失败（{e}），SN 可能为空。")
@@ -2685,7 +2768,7 @@ def backup_all_partitions(tn, local_ip, backup_dir, transport=None):
             files[fname] = {"size": os.path.getsize(fpath), "sha256": _sha256sum(fpath)}
     save_manifest(backup_dir, info, files)
     sn = info.get("SerialNumber", "未知")
-    model = info.get("ModelName", "未知")
+    model = _display_model_name(info)
     print(f"[✓] 设备信息: {model} / SN {sn}")
 
 def _find_factory_partition(backup_dir):
@@ -2751,8 +2834,103 @@ def _expected_size(idx: int) -> int:
     """取该分区的期望字节数（优先实时分区表）；未知则给一个宽松的默认值。"""
     return MTD_SIZES.get(idx, 16 * 1024 * 1024)
 
-def flash_uboot(tn, local_ip):
-    """用 HTTP 上传 U-Boot 并 dd 写入 /dev/mtdblock0，然后回读校验（危险操作）"""
+def _norm_model_name(name):
+    """把机型名归一化，用于黑名单比对。
+
+    设备上报的写法不统一（`XG-040G-MD` / `xg040gmd` / `XG 040G MD` 都见过），
+    所以去掉所有非字母数字字符再转大写：`XG-040G-MF` → `XG040GMF`。
+    这样黑名单里写标准写法就够，不用穷举各种分隔符。
+    """
+    return "".join(ch for ch in (name or "") if ch.isalnum()).upper()
+
+
+def check_uboot_flash_allowed(model_name, part_number=""):
+    """判断当前机型能否刷 tcboot.bin，返回 (allowed, reason, is_warning_only)。
+
+    allowed=False  → 必须中止（黑名单，实测会变砖）
+    allowed=True, is_warning_only=True → 放行但要警告（没验证过的机型）
+    allowed=True, is_warning_only=False → 正常放行（已知可用）
+
+    **为什么按机型而不是按 MAC/SN 判断**：tcboot 能不能用取决于机器的
+    U-Boot 布局与运营商版本，跟单台设备的 MAC 无关；而机型名是设备自己
+    从 cfgcli 报上来的，用户改不了，比让用户选下拉框可靠。
+
+    **两条独立证据**（任一命中黑名单就拦）：
+      1. `ModelName` —— 主证据，来自 cfgcli/TR069，实测 MF 报 XG-040G-MF
+      2. `PartNumber` —— 板级物料号，工厂区烧的，比 TR069 更底层；
+         ModelName 读不出来时靠它兜底
+
+    model_name 和 part_number 都为空时按「未知机型」处理 —— 只警告不拦。
+    理由：读不到机型名通常是因为设备刚重启 / cfgcli 暂时不可用，直接拒绝
+    会让正常的 MD 用户也刷不了；而真正的黑名单机型（MF）是能正常报出
+    机型名和物料号的。
+    """
+    # 只接受「像设备型号」的值：纯 ASCII 字母数字/连字符/下划线/空格。
+    # 为什么要过滤：机型档案的中文名（「烽火 HG5585F CT（电信版）」）也可能
+    # 顺着 device.json 传进来。它不是设备型号，拿去比对黑名单永远不匹配，
+    # 却会让「未知机型 → 警告」这条分支失效 —— 等于静默放行。所以这里
+    # 直接把它当成「读不到型号」处理。
+    raw = (model_name or "").strip()
+    if raw and not all(c.isascii() and (c.isalnum() or c in "-_ ") for c in raw):
+        raw = ""
+    norm = _norm_model_name(raw)
+    part = (part_number or "").strip().upper()
+
+    # --- 证据 1：机型名黑名单 ---
+    for bad in UBOOT_FLASH_BLOCKED_MODELS:
+        if norm and norm == _norm_model_name(bad):
+            return False, (
+                f"本机是 {raw}，**禁止**刷入 tcboot.bin！\n\n"
+                f"已有用户给 {bad} 刷 tcboot 后直接变砖，\n"
+                "只能拆机接串口进 XMODEM 模式救砖（耗时且不保证成功）。\n\n"
+                "tcboot.bin 只适配贝尔 XG-040G-MD / XG-140G-MD（移动版）。"), False
+
+    # --- 证据 2：物料号黑名单（机型名读不到时的兜底）---
+    for bad in UBOOT_FLASH_BLOCKED_PARTNUMBERS:
+        if part and part == bad.upper():
+            shown = raw or "读不到机型名"
+            return False, (
+                f"本机物料号 {part}（{shown}）属于 **禁止** 刷 tcboot 的批次！\n\n"
+                "实测该物料号对应的机型是 XG-040G-MF，\n"
+                "刷 tcboot 后直接变砖，只能拆机接串口进 XMODEM 救砖。\n\n"
+                "tcboot.bin 只适配贝尔 XG-040G-MD / XG-140G-MD（移动版）。"), False
+
+    # --- 未验证机型：放行但警告 ---
+    for untested in UBOOT_FLASH_UNTESTED_MODELS:
+        if norm and norm == _norm_model_name(untested):
+            return True, (
+                f"本机是 {raw} —— 这个机型**没有验证过**能否用 tcboot.bin。\n\n"
+                f"{untested} 和 {UBOOT_FLASH_BLOCKED_MODELS[0]} 都是 AN7583 芯片，\n"
+                f"而 tcboot.bin 是给 AN7581（XG-040G-MD / XG-140G-MD）编的；\n"
+                f"{UBOOT_FLASH_BLOCKED_MODELS[0]} 已经实测刷了必砖，\n"
+                f"{untested} 目前只是没人试过。\n\n"
+                "如果继续，出问题只能拆机用 XMODEM 救砖。"), True
+
+    # --- 两个字段都读不到：未知机型，警告 ---
+    if not norm and not part:
+        return True, (
+            "读不到设备机型名和物料号，无法确认 tcboot.bin 是否适用本机。\n"
+            "tcboot.bin 只适配贝尔 XG-040G-MD / XG-140G-MD（移动版）；\n"
+            "XG-040G-MF 实测刷入后变砖，只能拆机用 XMODEM 救砖。"), True
+
+    return True, "", False
+
+
+def flash_uboot(tn, local_ip, model_name="", part_number=""):
+    """用 HTTP 上传 U-Boot 并 dd 写入 /dev/mtdblock0，然后回读校验（危险操作）
+
+    model_name / part_number 是设备自报的机型与物料号（collect_device_info
+    拿到的 ModelName / PartNumber）。传进来是为了在**写任何字节之前**拦掉
+    已知会变砖的机型，见 check_uboot_flash_allowed()。
+    """
+    # === 第一道闸：机型/物料号黑名单 ===
+    # 放在最前面，连 curl 检测都不做 —— 黑名单机型不该有任何上传动作。
+    allowed, reason, _warn = check_uboot_flash_allowed(model_name, part_number)
+    if not allowed:
+        print(f"\n[✗] 已中止：{reason}")
+        print("[✗] 未向设备写入任何数据。")
+        sys.exit(1)
+
     print("[*] 上传 U-Boot 并使用 dd 写入 /dev/mtd0 ...")
 
     if not device_has_curl(tn):
@@ -3043,7 +3221,7 @@ def run_flow(args, confirm_flash=None):
         "backup": "开启 Telnet + FTP + 备份全部分区（不刷机）",
         "flash":  "开启 Telnet + FTP + 备份 + 刷写 U-Boot（危险！）",
         "stock2ubi": "开启 Telnet + 运行 an758x-stock2ubi + 自动备份校验（网页里刷）",
-        "report": "导出诊断包（设备上的密文/哈希 + 本地密钥表，发给作者分析）",
+        "report": "导出诊断包（密文/哈希 + 解密 so + 本地密钥表，发给作者分析）",
     }[mode]
     print("=" * 60)
     print(f"  XG-040G-MD 工具 v{VERSION}  ·  运行模式: {mode} — {mode_desc}")
@@ -3206,7 +3384,7 @@ def run_flow(args, confirm_flash=None):
         # 4a-3. 自动备份 + 校验
         device_info = collect_device_info(tn)
         sn = device_info.get("SerialNumber", "未知")
-        print(f"[*] 设备: {device_info.get('ModelName', '未知')}"
+        print(f"[*] 设备: {_display_model_name(device_info)}"
               f"（{device_info.get('Manufacturer', '?')}）SN={sn}")
 
         skipped_dir = None
@@ -3270,12 +3448,15 @@ def run_flow(args, confirm_flash=None):
         print("[!] 若本机分区布局与默认表不同，备份可能失败，请把上面的输出反馈给作者。")
 
     backup_dir_used = None
+    # 提前置空：后面刷写前的机型闸要读它，而它只在 backup/flash 分支里被赋值。
+    # 留着不初始化的话，将来若有别的模式走到刷写判断就是 NameError。
+    device_info = {}
 
     # === 5. 备份所有分区 ===
     if mode in ("backup", "flash"):
         # 先采集设备身份（机型/序列号），用于「同一台设备且备份完整就跳过」判定
         device_info = collect_device_info(tn)
-        model = device_info.get("ModelName", "未知")
+        model = _display_model_name(device_info)
         sn = device_info.get("SerialNumber", "未知")
         hw = device_info.get("HardwareVersion", "未知")
         sw = device_info.get("SoftwareVersion", "未知")
@@ -3305,6 +3486,28 @@ def run_flow(args, confirm_flash=None):
 
     # === 6. 刷写 U-Boot（仅 flash 模式） ===
     if mode == "flash":
+        # === 6a. 机型闸（必须在任何写入之前）===
+        # 放在备份**之后**、确认框**之前**：备份本身是无害的，用户可能正需要；
+        # 但确认框一旦弹出来，用户点「是」就来不及了，所以必须先拦。
+        uboot_model = device_info.get("ModelName", "") if device_info else ""
+        uboot_part = device_info.get("PartNumber", "") if device_info else ""
+        allowed, reason, warn_only = check_uboot_flash_allowed(uboot_model, uboot_part)
+        if not allowed:
+            print(f"\n[✗] 已中止刷写：{reason}")
+            print("[✗] 未向设备写入任何数据，设备状态未改变。")
+            print(f"[*] 本次备份仍保留在: {backup_dir_used or '(未备份)'}")
+            tn.close()
+            sys.exit(1)
+        if warn_only and reason:
+            print(f"\n[!] {reason}")
+            # 命令行必须再确认一次；GUI 那边在弹确认框前已经拦过
+            if not args.get("yes") and confirm_flash is None:
+                answer = input("\n仍要继续刷写请输入 YES（其他任何输入都退出）：").strip()
+                if answer != "YES":
+                    print("[*] 已取消，未做任何写入。")
+                    tn.close()
+                    return
+
         if not args.get("yes"):
             print("\n⚠️  即将把 U-Boot 写入 /dev/mtdblock0，操作不可逆，变砖风险！")
             if confirm_flash is not None:
@@ -3318,7 +3521,7 @@ def run_flow(args, confirm_flash=None):
                     print("[*] 已取消，未做任何写入。")
                     tn.close()
                     return
-        flash_uboot(tn, local_ip)
+        flash_uboot(tn, local_ip, model_name=uboot_model, part_number=uboot_part)
     else:
         print(f"[*] 模式 {mode}：已完成备份，跳过刷写（不写入任何分区）。")
 
