@@ -12,7 +12,7 @@
 
 # 注意：仓库里还有一个手工发布的旧 Release「V2.0」（大写 V，tag 指向 9b14035，
 # 那个提交里还没有 version.py）。所以版本号从 2.1.0 起步，避免新版本反而比它旧。
-VERSION = "2.3.4"
+VERSION = "2.3.5"
 
 # GitHub 仓库（release.sh 用来拼 release 页面地址，Actions 里也用）
 REPO = "xe5700/xg-040g-md-auto-flash-uboot"
