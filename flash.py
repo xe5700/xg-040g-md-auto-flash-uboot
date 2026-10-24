@@ -293,6 +293,16 @@ STOCK2UBI_IGNORE_KERNEL = False       # True 则加 --ignore-kernel-version 跳�
 STOCK2UBI_PROJECT_URL = "https://github.com/pbs05/an758x-stock2ubi"
 STOCK2UBI_UBOOT_URL = "https://github.com/pbs05/uboot-an758x"
 
+# --- NAND 闪存 / ECC 兼容性检查（见 nandcheck.py 顶部的长注释）---
+# 背景：HG5585F / HG5382A 用并行 NAND，同型号不同批次焊不同颗粒。
+# Winbond W29N02KVSIAF 和 Toshiba TC58NVG1S3HTAI0 几何参数完全一样，
+# 但 uboot-an758x 从 v2026.07-3 起把 Winbond 那颗的 soc_ecc_ability
+# 从 8 改成了 4，与原厂固件整片按 8 bit 写入的数据不兼容 —— 刷完 BL2
+# 读不出 UBI 里的 fip 卷，卡在 XMODEM。所以刷之前必须拦下来。
+NAND_CHECK_ENABLED = True        # False 则完全跳过闪存兼容性检查
+NAND_CHECK_BLOCK = True          # True: 不兼容时拒绝继续；False: 只警告
+NAND_FIX_DIR = "_out"            # --preloader-fix 补好的文件放这里
+
 BACKUP_DIR = f"backup_{time.strftime('%Y%m%d_%H%M%S')}"
 TIMEOUT = 15
 BACKUP_FIRMWARE = True
@@ -929,7 +939,8 @@ def enable_ftp_via_web(retry_seconds=None):
 
 def parse_args(argv):
     """命令行参数：--mode telnet|ftp|backup|flash|stock2ubi、--no-enable-telnet、
-    --no-enable-ftp、--force-backup、--reboot、--yes、--stock2ubi-file"""
+    --no-enable-ftp、--force-backup、--reboot、--yes、--stock2ubi-file、
+    --preloader、--preloader-fix"""
     global MODE
     args = {"mode": MODE, "enable_telnet": AUTO_ENABLE_TELNET, "yes": False,
             "reboot": False, "enable_ftp": AUTO_ENABLE_FTP,
@@ -939,7 +950,9 @@ def parse_args(argv):
             "no_browser": False,
             "model": None,
             "serial_port": "", "serial_baud": None,
-            "serial_user": "", "serial_password": None}
+            "serial_user": "", "serial_password": None,
+            "preloader": "", "preloader_fix": False,
+            "_rest": []}          # 未识别的参数原样转给 ttl_rescue.py
     i = 0
     while i < len(argv):
         a = argv[i]
@@ -963,6 +976,12 @@ def parse_args(argv):
             args["stock2ubi_file"] = argv[i + 1]; i += 2
         elif a.startswith("--stock2ubi-file="):
             args["stock2ubi_file"] = a.split("=", 1)[1]; i += 1
+        elif a == "--preloader" and i + 1 < len(argv):
+            args["preloader"] = argv[i + 1]; i += 2
+        elif a.startswith("--preloader="):
+            args["preloader"] = a.split("=", 1)[1]; i += 1
+        elif a == "--preloader-fix":
+            args["preloader_fix"] = True; i += 1
         elif a == "--stock2ubi-ignore-kernel":
             args["stock2ubi_ignore_kernel"] = True; i += 1
         elif a == "--no-browser":
@@ -988,21 +1007,25 @@ def parse_args(argv):
         elif a in ("-h", "--help"):
             print(__doc__ or "")
             print("用法: python3 flash.py "
-                  "[--mode telnet|ftp|backup|flash|stock2ubi|report] "
+                  "[--mode telnet|ftp|backup|flash|stock2ubi|report|ttl] "
                   "[--no-enable-telnet] [--no-enable-ftp] [--force-backup] "
                   "[--reboot] [--model bel|hg5585f] "
                   "[--stock2ubi-file 路径] "
+                  "[--preloader preloader.bin] [--preloader-fix] "
                   "[--stock2ubi-ignore-kernel] [--no-browser] "
                   "[--serial-port /dev/ttyUSB0|COM3] [--serial-baud 115200] "
                   "[--serial-user root] [--serial-password xxx] [-y]")
             sys.exit(0)
+        elif args["mode"] in ("ttl", "rescue", "xmodem"):
+            # TTL 模式下的参数全部转给 ttl_rescue.py，两边 CLI 保持一致
+            args["_rest"].append(a); i += 1
         else:
             print(f"[!] 未知参数: {a}（用 --help 查看用法）")
             sys.exit(1)
     if args["mode"] not in ("telnet", "ftp", "backup", "flash", "stock2ubi",
-                            "report"):
+                            "report", "ttl", "rescue", "xmodem"):
         print(f"[!] 非法模式: {args['mode']}"
-              "（可选 telnet / ftp / backup / flash / stock2ubi / report）")
+              "（可选 telnet / ftp / backup / flash / stock2ubi / report / ttl）")
         sys.exit(1)
     return args
 
@@ -1938,7 +1961,11 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote, urlparse
 
-LOCAL_HTTP_PORT = 8080           # 主机临时 HTTP 服务器端口
+LOCAL_HTTP_PORT = 8080           # 主机临时 HTTP 服务器端口（首选值，见 HTTP_PORT_SCAN）
+# 8080 被占用时往后顺延多少个端口。用法是「从首选值开始顺序试」而不是
+# bind(0) 随机挑：用户要按提示去防火墙放行这个端口，并且下次要复用同一个，
+# 随机端口每次不一样，用户永远配不对。20 个足够躲开常驻软件。
+HTTP_PORT_SCAN = 20
 
 
 def _safe_basename(path: str) -> str:
@@ -2020,6 +2047,13 @@ class _UploadHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self._deny():
             return
+        # 连通性探针：不读文件、不落盘，用来在正式传输前确认设备能不能
+        # 连上主机（防火墙没放行时表现为卡到超时，先探一次能立刻定位）。
+        # 这里比对**未清洗的原始路径**：_safe_basename 会 lstrip(".")，
+        # "__ping" 会被它变成 "ping"，用清洗后的值判断永远匹配不上。
+        if unquote(urlparse(self.path).path) == "/__ping":
+            self._reply(200, b"pong")
+            return
         path = os.path.join(self.serve_dir, _safe_basename(self.path))
         if not os.path.isfile(path):
             self._reply(404, b"not found")
@@ -2051,19 +2085,75 @@ class _UploadHandler(BaseHTTPRequestHandler):
 
 
 class TempFileServer:
-    """后台线程运行的临时 HTTP 文件服务器。"""
+    """后台线程运行的临时 HTTP 文件服务器。
 
-    def __init__(self, serve_dir, recv_dir, allow_ip=None, port=LOCAL_HTTP_PORT, quiet=True):
+    端口来自 config.ini 的 `[net] http_port`（默认 8080），但它只是
+    **首选值**：被别的软件占用时按顺序往后找一个空闲端口（8081、8082…），
+    并把结果写回 config.ini，下次启动直接复用。
+
+    为什么不用 bind(0) 让内核随机挑：用户要照提示去防火墙放行这个端口，
+    而且下次还要用同一个。随机端口每次都不一样，用户永远配不对 ——
+    实测占用方还是间歇性的（中国电信「星辰智能体」常驻 8080，但它会重启），
+    固定候选顺延才是用户跟得上的行为。
+
+    退让顺序（先精确后放宽）：
+      1. 0.0.0.0:<port>          —— 正常情况，和以前完全一致
+      2. <本机网卡 IP>:<port>    —— 有人只占了回环（0.0.0.0 会和它冲突），
+                                    绑到具体网卡地址就不冲突，**端口不用变**
+      两个都失败就 port+1 重来，最多往后扫 HTTP_PORT_SCAN 个。
+
+    第 2 条是真实场景：「星辰智能体」只绑 127.0.0.1:8080，所以能保住 8080。
+
+    设备侧用的 URL 必须读 `srv.port`（实际绑上的端口），不能再写
+    LOCAL_HTTP_PORT —— 首选端口可能已经顺延了。
+    """
+
+    def __init__(self, serve_dir, recv_dir, allow_ip=None, port=None,
+                 bind_ip=None, quiet=True, scan=HTTP_PORT_SCAN):
         self.serve_dir = os.path.abspath(serve_dir)
         self.recv_dir = os.path.abspath(recv_dir)
-        self.port = port
+        # 默认值在**调用时**取全局，不能在参数默认值里写 LOCAL_HTTP_PORT：
+        # 那是定义时求值，顺延过的端口会读不到。
+        self.requested_port = int(port or LOCAL_HTTP_PORT)
+        self.bind_ip = bind_ip or "0.0.0.0"
         handler = type("_H", (_UploadHandler,), {
             "serve_dir": self.serve_dir, "recv_dir": self.recv_dir,
             "allow_ip": allow_ip, "quiet": quiet,
         })
-        self.httpd = ThreadingHTTPServer(("0.0.0.0", port), handler)
-        self.httpd.daemon_threads = True
-        self._thread = None
+        self.httpd, self.port, self._fallback_note = self._bind(
+            handler, self.requested_port, self.bind_ip, scan)
+
+    @staticmethod
+    def _bind(handler, preferred, bind_ip, scan):
+        """按候选顺序找一个能绑上的地址，返回 (httpd, 端口, 说明文字)。
+
+        SO_REUSEADDR 在这里帮不上忙：它只处理 TIME_WAIT 残留，
+        救不了正在 LISTEN 的别的进程（而且 HTTPServer 默认已经开了）。
+        """
+        addrs = [("0.0.0.0", preferred)]
+        if bind_ip and bind_ip != "0.0.0.0":
+            addrs.append((bind_ip, preferred))   # 只占回环的软件挡不住这条
+        for p in range(preferred + 1, preferred + 1 + scan):
+            addrs.append(("0.0.0.0", p))
+            if bind_ip and bind_ip != "0.0.0.0":
+                addrs.append((bind_ip, p))
+
+        last = None
+        for addr, p in addrs:
+            try:
+                httpd = ThreadingHTTPServer((addr, p), handler)
+            except OSError as e:
+                last = e
+                continue
+            httpd.daemon_threads = True
+            used = httpd.server_address[1]
+            note = None
+            if p != preferred:
+                note = (f"主机端口 {preferred} 已被占用，本次改用 {used}"
+                        f"（已写入 config.ini，下次启动继续用它）")
+            return httpd, used, note
+        raise OSError(f"临时 HTTP 服务器在 {preferred}~{preferred + scan} "
+                      f"范围内都绑不上（最后一个错误：{last}）")
 
     def start(self):
         self._thread = threading.Thread(target=self.httpd.serve_forever,
@@ -2085,6 +2175,51 @@ class TempFileServer:
 
     def __exit__(self, *exc):
         self.stop()
+
+
+def save_http_port(port):
+    """把实际使用的 HTTP 端口写回 config.ini，下次启动直接复用。
+
+    为什么是「读-改-写」而不是整体覆盖：config.ini 里还有账号密码等一大堆
+    设置，必须是合并式更新。这里只动 [net] http_port 一个键。
+
+    为什么写盘失败不算错：命令行直接跑 flash.py 时可能根本没有 config.ini
+    （也不该为一次刷机凭空造一个），那本次照样能用，只是下次重新探测。
+    """
+    try:
+        import config as _config
+        path = _config.config_path()        # 和 GUI 用同一个文件，别拼 CWD 相对路径
+        cfg = _config.load(path)
+        if not cfg.has_section("net"):
+            cfg.add_section("net")
+        cfg.set("net", "http_port", str(int(port)))
+        _config.save(cfg, path)
+        return True
+    except Exception as e:  # noqa: BLE001
+        print(f"[!] 端口 {port} 写入 config.ini 失败（本次不受影响）：{e}")
+        return False
+
+
+def start_temp_server(serve_dir, recv_dir, local_ip, allow_ip=None, quiet=True):
+    """起一个临时 HTTP 文件服务器；端口顺延了就提示放行并写回配置。
+
+    所有需要「主机把文件送给光猫 / 接光猫推回来的备份」的流程都走这里，
+    以免每个调用点各写一遍顺延 + 提示 + 落盘的逻辑。
+    """
+    # global 必须写在函数体最前面 —— 后面要用这个全局当端口默认值。
+    global LOCAL_HTTP_PORT
+    srv = TempFileServer(serve_dir=serve_dir, recv_dir=recv_dir,
+                         allow_ip=allow_ip, port=LOCAL_HTTP_PORT,
+                         bind_ip=local_ip, quiet=quiet)
+    if srv.port != LOCAL_HTTP_PORT:
+        print(f"[!] {srv._fallback_note}")
+        LOCAL_HTTP_PORT = srv.port        # 本次后续的分区共用新端口
+        save_http_port(srv.port)
+        # 换端口后防火墙规则不会自动跟着变，必须明确告诉用户放行哪个
+        firewall_help(srv.port, local_ip,
+                      reason="这是程序顺延后实际使用的端口。")
+    return srv.start()
+
 
 # ---------- 临时 TFTP 服务器（烽火备份用）----------
 # 烽火的 busybox 不一定带 curl，但一定带 tftp —— 教程里备份就是用
@@ -2555,8 +2690,13 @@ def _check_backup_file(i, name, filepath):
     print(f"    → {filepath} ({size} 字节)")
 
 
-def _backup_one_curl(tn, i, name, local_ip, backup_dir):
-    """用一个分区：dd 直读 mtdN，通过 curl PUT 到主机的临时 HTTP 服务器。"""
+def _backup_one_curl(tn, i, name, local_ip, backup_dir, port):
+    """用一个分区：dd 直读 mtdN，通过 curl PUT 到主机的临时 HTTP 服务器。
+
+    `port` 必须传实际绑上的端口（`srv.port`）：首选端口被别的软件占用时
+    TempFileServer 会退让，写死 LOCAL_HTTP_PORT 会让设备连到一个没人听的
+    端口上（表现为 curl 卡住/连接被拒，而不是报端口冲突，很难排查）。
+    """
     fname = f"mtd{i}_{name}.bin"
     filepath = os.path.join(backup_dir, fname)
     print(f"  → 备份 mtd{i} ({name}) ...")
@@ -2567,7 +2707,7 @@ def _backup_one_curl(tn, i, name, local_ip, backup_dir):
         pass
 
     cmd = (f"dd if=/dev/mtd{i} bs=1M 2>/dev/null | "
-           f"curl -s -T - http://{local_ip}:{LOCAL_HTTP_PORT}/{fname}")
+           f"curl -s -T - http://{local_ip}:{port}/{fname}")
     drain(tn)                       # 先排空，避免上一步的 '#' 让它立刻返回
     tn.write(cmd.encode() + b"\n")
     # 大分区（如 all_flash 236MB）需要更长时间，按大小给足超时
@@ -2619,6 +2759,51 @@ def device_download(tn, url, remote_path, timeout=180):
            f"wget -q -O {remote_path} '{url}'; "
            "fi; echo DL_RC=$?")
     return run_cmd(tn, cmd, timeout=timeout)
+
+
+def firewall_help(port, local_ip, reason=""):
+    """打印「设备连不上主机临时服务器」的排查指引。
+
+    为什么本程序只提示、不自动放行：防火墙是**平台相关**的 —— 程序虽然
+    只发布 Windows exe，但源码在装了 Python 的机器上到处能跑（Linux、
+    macOS、FreeBSD，甚至 Android/Termux），各自放行方式完全不同。
+    静默去改别人的防火墙规则，比让用户手动执行一条命令危险得多。
+    """
+    print(f"""
+[!] 设备连不上主机的临时文件服务器（{local_ip}:{port}）。{reason}
+    最常见的原因是**主机防火墙没有放行这个端口/网卡**。
+    本程序不自动改防火墙（各系统差别大，静默改规则风险更高），
+    请按自己的系统手动放行后重试：
+
+      Linux · firewalld   sudo firewall-cmd --add-port={port}/tcp
+                          （要长期生效再加 --permanent 并 --reload）
+      Linux · ufw         sudo ufw allow {port}/tcp
+      macOS               系统设置 → 网络 → 防火墙 → 选项 → 允许 Python 入站
+      Windows             控制面板 → Windows Defender 防火墙 → 允许应用通过
+                          （或首次运行弹窗时勾选「专用网络」）
+      FreeBSD             在 /etc/pf.conf 放行 tcp/{port}，再 pfctl -f /etc/pf.conf
+
+    其它要确认的：
+      · 主机与光猫在同一网段（本工具认 {local_ip} 这张网卡）；
+      · 光猫的 LAN 口没有开「客户端隔离」；
+      · 若上面提示过端口被占用而换了端口，放行的必须是换后的那个端口。
+""")
+
+
+def probe_host_reachable(tn, local_ip, port, timeout=8):
+    """在正式传输前先确认设备能连上主机的临时服务器，返回 (ok, 原始输出)。
+
+    为什么值得多花一次往返：被防火墙拦包时，传输的表现是**卡住到超时**，
+    不会有任何明确报错 —— 用户只看到长时间没反应，再看到一句
+    「等待提示符超时」，根本猜不到是防火墙。先探一次就能立刻说清问题。
+    """
+    cmd = ("if command -v curl >/dev/null 2>&1; then "
+           f"curl -s -m {timeout} http://{local_ip}:{port}/__ping; "
+           "else "
+           f"wget -q -O - -T {timeout} http://{local_ip}:{port}/__ping; "
+           "fi; echo PING_RC=$?")
+    out = run_cmd(tn, cmd, timeout=timeout + 10) or ""
+    return ("pong" in out), out
 
 
 def _backup_one_stock2ubi(i, name, base_url, backup_dir):
@@ -2729,12 +2914,17 @@ def backup_all_partitions(tn, local_ip, backup_dir, transport=None):
         for i, name in pairs:
             _backup_one_stock2ubi(i, name, base_url, backup_dir)
     elif transport == "curl":
-        with TempFileServer(serve_dir=backup_dir, recv_dir=backup_dir,
-                            allow_ip=ROUTER_IP, port=LOCAL_HTTP_PORT) as srv:
-            print(f"[*] 主机临时 HTTP 服务器: http://{local_ip}:{LOCAL_HTTP_PORT}")
+        with start_temp_server(serve_dir=backup_dir, recv_dir=backup_dir,
+                               local_ip=local_ip, allow_ip=ROUTER_IP) as srv:
+            print(f"[*] 主机临时 HTTP 服务器: http://{local_ip}:{srv.port}")
+            ok, _ = probe_host_reachable(tn, local_ip, srv.port)
+            if not ok:
+                print("[!] 光猫连不上这个地址，先不开始备份（避免白等一场）。")
+                firewall_help(srv.port, local_ip)
+                sys.exit(1)
             print("[*] 开始备份所有 MTD 分区（使用 dd + curl 上传）...")
             for i, name in pairs:
-                _backup_one_curl(tn, i, name, local_ip, backup_dir)
+                _backup_one_curl(tn, i, name, local_ip, backup_dir, srv.port)
     else:
         with _TftpReceiver(recv_dir=backup_dir, allow_ip=ROUTER_IP,
                            port=LOCAL_TFTP_PORT) as srv:
@@ -2938,12 +3128,18 @@ def flash_uboot(tn, local_ip, model_name="", part_number=""):
         sys.exit(1)
 
     uboot_size = os.path.getsize(UBOOT_FILE)
-    with TempFileServer(serve_dir=".", recv_dir=".", allow_ip=ROUTER_IP,
-                        port=LOCAL_HTTP_PORT) as srv:
-        print(f"[*] 主机临时 HTTP 服务器: http://{local_ip}:{LOCAL_HTTP_PORT}")
-        tn.write(f"curl -s -o /tmp/uboot.bin http://{local_ip}:{LOCAL_HTTP_PORT}/{UBOOT_FILE}\n".encode())
+    with start_temp_server(serve_dir=".", recv_dir=".", local_ip=local_ip,
+                           allow_ip=ROUTER_IP) as srv:
+        print(f"[*] 主机临时 HTTP 服务器: http://{local_ip}:{srv.port}")
+        ok, _ = probe_host_reachable(tn, local_ip, srv.port)
+        if not ok:
+            print("[!] 光猫连不上这个地址，先不下载 U-Boot。")
+            firewall_help(srv.port, local_ip)
+            sys.exit(1)
+        tn.write(f"curl -s -o /tmp/uboot.bin http://{local_ip}:{srv.port}/{UBOOT_FILE}\n".encode())
         if not wait_for(tn, "#", timeout=120):
             print("[!] U-Boot 下载超时")
+            firewall_help(srv.port, local_ip, reason="下载 U-Boot 时设备没连上来。")
             sys.exit(1)
 
     print("[*] 校验 U-Boot 文件...")
@@ -3060,6 +3256,44 @@ def find_stock2ubi(path=None):
     return None
 
 
+def check_nand_ecc_compat(tn, preloader_path=None, block=None, log=print):
+    """在设备上查闪存颗粒，并判断将要刷的 preloader 会不会因 ECC 不一致砖机。
+
+    返回 (chip, ok, msg)：
+        chip  —— 设备颗粒信息 dict，读不到时为 None
+        ok    —— False 表示应该拦下（block=True 时调用方要中止）
+        msg   —— 给用户看的中文说明
+
+    为什么要在刷之前查：Winbond W29N02KVSIAF 和 Toshiba TC58NVG1S3HTAI0
+    的几何参数完全一样，/proc/mtd 看不出区别；但 uboot-an758x v2026.07-3
+    起把前者 soc_ecc_ability 从 8 改成 4，与原厂整片按 8 bit 写入的
+    OOB 排布不兼容，刷完 BL2 读不出 fip 卷。详见 nandcheck.py 顶部注释。
+    """
+    if not NAND_CHECK_ENABLED:
+        return None, True, "已禁用闪存兼容性检查（NAND_CHECK_ENABLED=False）。"
+
+    try:
+        import nandcheck
+    except Exception as e:  # noqa: BLE001
+        # 检查器缺失不该阻断刷机流程（老版本 dist 里可能没有这个文件）
+        return None, True, f"无法加载 nandcheck.py（{e}），跳过闪存兼容性检查。"
+
+    chip = nandcheck.detect_nand_chip(
+        lambda cmd, t=30: run_cmd(tn, cmd, timeout=t), log=log)
+    if chip is None:
+        return None, True, (
+            "读不到闪存颗粒信息（dmesg 无探测记录、sysfs 也没有 mtd0），"
+            "无法做 ECC 兼容性检查。")
+
+    ok, msg = nandcheck.preloader_safe_for_chip(preloader_path, chip)
+    if block is None:
+        block = NAND_CHECK_BLOCK
+    if not ok and not block:
+        msg += "\n（NAND_CHECK_BLOCK=False，仅警告，继续执行。）"
+        ok = True
+    return chip, ok, msg
+
+
 def run_stock2ubi(tn, local_ip, filepath, ignore_kernel=False,
                   open_browser=True):
     """上传 an758x-stock2ubi 到设备 /tmp、chmod +x、后台运行，等 3333 端口起来。
@@ -3102,13 +3336,20 @@ def run_stock2ubi(tn, local_ip, filepath, ignore_kernel=False,
     # 下到 .new 再 mv：即使旧进程刚被 SIGTERM、还没完全退出，mv 只是改目录项，
     # 不会碰旧 inode，所以不会被 Text file busy 拦住。
     dl_tmp = STOCK2UBI_REMOTE + ".new"
-    with TempFileServer(serve_dir=fdir, recv_dir=".", allow_ip=ROUTER_IP,
-                        port=LOCAL_HTTP_PORT) as srv:
-        print(f"[*] 主机临时 HTTP 服务器: http://{local_ip}:{LOCAL_HTTP_PORT}")
-        url = f"http://{local_ip}:{LOCAL_HTTP_PORT}/{urllib_parse.quote(fname)}"
+    with start_temp_server(serve_dir=fdir, recv_dir=".", local_ip=local_ip,
+                           allow_ip=ROUTER_IP) as srv:
+        print(f"[*] 主机临时 HTTP 服务器: http://{local_ip}:{srv.port}")
+        ok, _ = probe_host_reachable(tn, local_ip, srv.port)
+        if not ok:
+            print("[!] 光猫连不上这个地址，先不上传 stock2ubi。")
+            firewall_help(srv.port, local_ip)
+            sys.exit(1)
+        url = f"http://{local_ip}:{srv.port}/{urllib_parse.quote(fname)}"
         out = device_download(tn, url, dl_tmp, timeout=180)
         if "DL_RC=0" not in (out or ""):
             print(f"[!] an758x-stock2ubi 上传失败：{(out or '').strip()[-300:]}")
+            firewall_help(srv.port, local_ip,
+                          reason="上传 stock2ubi 时设备没连上来。")
             sys.exit(1)
     out = run_cmd(tn, f"mv -f {dl_tmp} {STOCK2UBI_REMOTE}; echo MV_RC=$?",
                   timeout=30)
@@ -3177,12 +3418,14 @@ def run_stock2ubi(tn, local_ip, filepath, ignore_kernel=False,
     print(f"    ① 刷写 BL2      —— 上传 preloader.bin（不要用 firstblock.bin）")
     print(f"       ⚠️ firstblock.bin 是整块 boot 区镜像，成功率低、很容易砖")
     print(f"    ② 重建 UBI      —— 首次刷机必须先做，会清空 UBI 内数据")
-    print(f"       ⚠️ 没刷 preloader 就重建 UBI = 必砖")
+    print(f"       ⚠️ 重建完 UBI 就是空的：接着必须做完第 ④ 步刷 U-Boot，")
+    print(f"          否则第 ⑥ 步启动时 BL2 在 UBI 里找不到 fip 卷，起不来")
+    print(f"          （只重建不会弄死机器，补上 U-Boot 就能回来）")
     print(f"    ③ 板级数据      —— 上传 backup_*/{FACTORY_1M_NAME}（1.0 MiB，非 mtd13）")
     print(f"    ④ 刷写 U-Boot   —— 上传 bl31-u-boot.fip")
     print(f"    ⑤ 刷写系统      —— 上传 QWRT / PONWRT 的 sysupgrade")
     print(f"    ⑥ 启动系统      —— 首次约 1~3 分钟，别断电")
-    print(f"       ⚠️ 没刷 bl31-u-boot.fip 就启动 = 必砖")
+    print(f"       ⚠️ 第 ④ 步没成功就点启动 = 起不来（可接 TTL 用 XMODEM 救）")
     print(f"    重启后访问 http://192.168.0.1/ 继续安装（首次进入恢复页可能要约一分钟）。")
     print(f"    项目地址: {STOCK2UBI_PROJECT_URL}")
     print(f"    U-Boot 项目地址: {STOCK2UBI_UBOOT_URL}")
@@ -3215,6 +3458,20 @@ def run_flow(args, confirm_flash=None):
     命令行 input()；GUI 传入对话框回调。
     """
     mode = args["mode"]
+    # === TTL + XMODEM 救砖：完全不碰网络，只驱动串口 ===
+    #
+    # 放在最前面，因为这条路径不登录、不备份、不走网页 —— 设备已经砖了，
+    # telnet/FTP 都不存在，走后面任何一段都会卡住。参数原样转给 ttl_rescue。
+    if mode in ("ttl", "rescue", "xmodem"):
+        import ttl_rescue
+        fwd = []
+        if args.get("serial_port"):
+            fwd += ["--port", args["serial_port"]]
+        if args.get("preloader"):
+            fwd += ["--file", args["preloader"]]
+        fwd += list(args.get("_rest") or [])
+        sys.exit(ttl_rescue.main(fwd))
+
     mode_desc = {
         "telnet": "仅开启 Telnet（不碰 FTP、不备份、不刷机）",
         "ftp":    "仅开启 FTP（su 提权用，不备份、不刷机）",
@@ -3369,6 +3626,54 @@ def run_flow(args, confirm_flash=None):
             tn.close()
             sys.exit(1)
 
+        # 4a-0. 闪存颗粒 / ECC 兼容性检查（只读，不碰设备数据）
+        # 这一模式后面要在网页里上传 preloader.bin，而 preloader 的 ECC
+        # 设置跟设备颗粒不匹配就是必砖。这里先查清楚，把结论直接告诉用户，
+        # 免得用户拿 v2026.07-3/-4 的 preloader 去刷 Winbond 机型。
+        chip, _ok, _msg = check_nand_ecc_compat(
+            tn, preloader_path=(args.get("preloader") or None))
+        if chip:
+            print(f"[*] 闪存: {chip.get('vendor') or '未知厂商'} "
+                  f"{chip.get('model') or '(读不到型号)'}")
+            if _ok:
+                print(f"[✓] {_msg}")
+            else:
+                print(f"\n[✗] {_msg}")
+                # 能自动补救就不用让用户白跑一趟：把 ECC 字段改回 8 后另存
+                # 一份，用户直接上传补好的文件即可。原文件一个字节都不动。
+                if args.get("preloader_fix"):
+                    import nandcheck
+                    out = os.path.join(NAND_FIX_DIR, "preloader_ecc8.bin")
+                    os.makedirs(NAND_FIX_DIR, exist_ok=True)
+                    fok, fmsg = nandcheck.patch_preloader_ecc(
+                        args["preloader"], out)
+                    print(f"  [{'✓' if fok else '✗'}] {fmsg}")
+                    if fok:
+                        print("[!] 请在上传 preloader 那一步选择这个文件：")
+                        print(f"    {out}")
+                        print("[!] ⚠️ 这只是 BL2 一层。U-Boot 仍是 4bit，"
+                              "单用可能会在「第一次重启」时再砖。")
+                        print("[!] 真要一次刷通，需要把 FIP 那一层也统一到"
+                              "8bit（见 NAND-ECC-问题报告.md 第六节路线 B）。")
+                        tn.close()
+                        sys.exit(1)
+                print("[!] 本机型请改走 XMODEM 路径，不要用 stock2ubi 一键刷：")
+                print("    1) 本工具的备份照常做（纯读取，不受影响）")
+                print("    2) 照常刷 preloader / firstblock / FIP，刷完进不去"
+                      "系统是预期现象")
+                print("    3) 接 TTL，看到 Press x to load ... via XMODEM 时"
+                      "按 x，发送 bl31-u-boot.fip")
+                print("    4) U-Boot 起来后正常走网页恢复刷 OpenWrt")
+                print("[!] 原因是厂商内核按 8bit 写、新 BL2 按 4bit 读，两边"
+                      "错位；XMODEM 路径里写读都是 BL2 自己，所以自洽。")
+                print("[!] --preloader-fix 只补 BL2 这一层，单用它会变成"
+                      "「刷完第一次重启才砖」，别当解法。")
+                print("[!] 未向设备写入任何数据，设备状态未改变。")
+                tn.close()
+                sys.exit(1)
+        else:
+            print(f"[!] {_msg}")
+
         # 4a-1. 先读分区表：备份要按本机真实分区号/大小走
         live_table = read_mtd_table(tn)
         if apply_mtd_table(live_table):
@@ -3415,12 +3720,14 @@ def run_flow(args, confirm_flash=None):
         print(f"      ① 刷写 BL2      —— 上传 preloader.bin（不要用 firstblock.bin）")
         print(f"         ⚠️ firstblock.bin 是整块 boot 区镜像，成功率低、很容易砖")
         print(f"      ② 重建 UBI      —— 首次刷机必须先做，会清空 UBI 内数据")
-        print(f"         ⚠️ 没刷 preloader 就重建 UBI = 必砖")
+        print(f"         ⚠️ 重建完 UBI 就是空的：接着必须做完第 ④ 步刷 U-Boot，")
+        print(f"            否则第 ⑥ 步启动时 BL2 在 UBI 里找不到 fip 卷，起不来")
+        print(f"            （只重建不会弄死机器，补上 U-Boot 就能回来）")
         print(f"      ③ 板级数据      —— 上传 backup_*/{FACTORY_1M_NAME}（1.0 MiB，非 mtd13）")
         print(f"      ④ 刷写 U-Boot   —— 上传 bl31-u-boot.fip")
         print(f"      ⑤ 刷写系统      —— 上传 QWRT / PONWRT 的 sysupgrade")
         print(f"      ⑥ 启动系统      —— 首次约 1~3 分钟，别断电")
-        print(f"         ⚠️ 没刷 bl31-u-boot.fip 就启动 = 必砖")
+        print(f"         ⚠️ 第 ④ 步没成功就点启动 = 起不来（可接 TTL 用 XMODEM 救）")
         print(f"    重启后访问 http://192.168.0.1/ 继续安装"
               f"（首次进入恢复页可能要约一分钟）。")
         print(f"    项目地址: {STOCK2UBI_PROJECT_URL}")

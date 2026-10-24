@@ -45,7 +45,7 @@ _VERSION_INFO = f"""VSVersionInfo(
         StringStruct('FileDescription', '邪恶的光猫刷机工具箱'),
         StringStruct('FileVersion', '{VERSION}'),
         StringStruct('InternalName', 'xe-pon-flash-toolkit'),
-        StringStruct('LegalCopyright', 'WTFPL v2'),
+        StringStruct('LegalCopyright', 'AGPL-3.0-only'),
         StringStruct('OriginalFilename', 'xe-pon-flash-toolkit.exe'),
         StringStruct('ProductName', '邪恶的光猫刷机工具箱'),
         StringStruct('ProductVersion', '{VERSION}'),

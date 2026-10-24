@@ -7,7 +7,10 @@
 
 产出（都在 dist 目录下）：
   1. dist/xe-pon-flash-toolkit-v<版本>.zip
-     解压即用的完整包：exe + tcboot.bin + an758x-stock2ubi。
+     解压即用的完整包：exe + tcboot.bin + an758x-stock2ubi + uboot-bin/。
+     uboot-bin/ 是 uboot_release.py 下好的 U-Boot 合集（修改版 / 官方版 /
+     loong1996 三个子目录），界面的「自动查找」就在 exe 同级的这个目录里找
+     FIP，所以跟着 zip 一起发，用户不用自己再去上游 Release 里翻。
   2. dist/release/ —— 专门给 GitHub Release 用的副本，文件名带版本号：
        xe-pon-flash-toolkit-v<版本>.exe
        xe-pon-flash-toolkit-v<版本>.zip
@@ -47,6 +50,12 @@ TOOLKIT = "xe-pon-flash-toolkit"
 STOCK2UBI_REPO = "pbs05/an758x-stock2ubi"
 STOCK2UBI_ASSET = "an758x-stock2ubi"
 STOCK2UBI_LOCAL = "an758x-stock2ubi"
+
+# 上游 U-Boot 合集：由 uboot_release.py 从三个上游仓库下到仓库根的 uboot-bin/，
+# 这里原样进 zip。为什么要带上：界面的「自动查找」就是按 exe 同级的 uboot-bin/
+# 找 FIP 的，解压即用才不用用户自己再去 GitHub Release 里翻 —— 翻错一份、
+# 尤其是华邦机型拿错了引导，就是一次变砖。
+UBOOT_DIR = "uboot-bin"
 
 RELEASE_DIR = "release"
 
@@ -137,6 +146,32 @@ def fetch_stock2ubi(dist):
     return None
 
 
+def collect_uboot(root=UBOOT_DIR):
+    """收集 uboot-bin/ 下所有要进 zip 的文件，返回 [(绝对路径, zip 内路径)]。
+
+    递归：修改版 / 官方版 / loong1996 是三个子目录，loong1996 下面还有一层机型。
+    目录本身也保留（arcname 带着相对路径），用户解压后能一眼看出哪份是哪份。
+
+    目录不存在只警告不报错 —— 本地跑 `build_exe.sh` 时未必先下过 U-Boot，
+    没下过就打一个不含引导的包，不该因此发不了版。
+    """
+    out = []
+    if not os.path.isdir(root):
+        print("警告：没有 %s 目录，zip 里将不含 U-Boot 合集"
+              "（先跑 python uboot_release.py）" % root, file=sys.stderr)
+        return out
+    for dirpath, dirnames, filenames in os.walk(root):
+        # 排序 + 跳过 __pycache__：让 zip 里的顺序稳定，两次构建结果可比对
+        dirnames[:] = sorted(d for d in dirnames if d != "__pycache__")
+        for fn in sorted(filenames):
+            if fn.startswith("."):      # 隐藏文件（本地的 .gitignore 之类）不进去
+                continue
+            full = os.path.join(dirpath, fn)
+            rel = os.path.relpath(full, root)
+            out.append((full, os.path.join(root, rel)))
+    return out
+
+
 def main(argv):
     dist = argv[1] if len(argv) > 1 else "dist"
 
@@ -161,6 +196,7 @@ def main(argv):
         return 1
 
     stock2ubi = fetch_stock2ubi(dist)
+    uboots = collect_uboot()
 
     # 本地用的完整包：解压即用，文件名带版本号
     zip_name = "%s-v%s.zip" % (TOOLKIT, VERSION)
@@ -171,11 +207,22 @@ def main(argv):
         if stock2ubi:
             # 用标准名写进 zip，不带上游 tag —— flash.py 就是按这个名字找的
             z.write(stock2ubi, STOCK2UBI_LOCAL)
+        for full, arc in uboots:
+            z.write(full, arc)
 
     print("已生成 %s（%d 字节）" % (out, os.path.getsize(out)))
     with zipfile.ZipFile(out) as z:
+        # U-Boot 合集有十几个文件，全列出来会把日志刷屏，只报数量和小计
         for info in z.infolist():
+            if info.filename.startswith(UBOOT_DIR + "/"):
+                continue
             print("  包含 %s（%d 字节）" % (info.filename, info.file_size))
+        if uboots:
+            n_bytes = sum(os.path.getsize(f) for f, _ in uboots)
+            print("  包含 %s/ 下 %d 个 U-Boot 文件（压缩前 %d 字节）"
+                  % (UBOOT_DIR, len(uboots), n_bytes))
+        else:
+            print("  （不含 U-Boot 合集）")
 
     # 给 Release 用的 ASCII 名副本，带版本号。
     # 先整个清掉，免得上次的残留被 CI 的 dist/release/* 一起传上去。

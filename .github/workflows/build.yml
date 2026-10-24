@@ -67,7 +67,7 @@ jobs:
           python -m pip install telnetlib3 pyinstaller -r requirements.txt
 
       - name: 语法检查
-        run: python -m py_compile flash.py gui.py config.py version.py changelog.py package_release.py
+        run: python -m py_compile flash.py gui.py config.py version.py changelog.py package_release.py uboot_release.py
 
       - name: 打包 exe
         run: python -m PyInstaller --clean --noconfirm build_exe.spec
@@ -131,7 +131,16 @@ jobs:
           grep -q "v${{ steps.ver.outputs.version }}" selftest.log \
             || echo "::warning::selftest.log 里没看到版本号 ${{ steps.ver.outputs.version }}"
 
-      - name: 打包 zip（exe + tcboot.bin + an758x-stock2ubi）并准备 Release 附件
+      - name: 下载上游 U-Boot 合集（修改版 / 官方版 / loong1996）
+        env:
+          # 查 api.github.com 要 token：匿名 60 次/小时，这一步要查三个仓库加
+          # 十几个 asset，很容易被限流。下载 asset 本身不带 token
+          # （会 302 到 objects.githubusercontent.com，跟过去等于把 token
+          # 送给别的域名）。
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python uboot_release.py uboot-bin
+
+      - name: 打包 zip（exe + tcboot.bin + an758x-stock2ubi + uboot-bin）并准备 Release 附件
         env:
           # 带 token 查 GitHub API：匿名只有 60 次/小时，Actions 跑一轮就
           # 可能被 403 rate limit 挡掉（本地实测踩过）。CI 里是 5000 次/小时。
@@ -175,12 +184,18 @@ jobs:
 
           Windows 单文件 exe，下载后直接双击运行，无需安装 Python。
 
-          - 推荐下载：\`xe-pon-flash-toolkit-v${VER}.zip\`（已含 exe、tcboot.bin、an758x-stock2ubi，解压即用）
-          - 只要 exe：\`xe-pon-flash-toolkit-v${VER}.exe\`（tcboot.bin 已内置，开箱即用）
+          - 推荐下载：\`xe-pon-flash-toolkit-v${VER}.zip\`（已含 exe、tcboot.bin、an758x-stock2ubi，
+            以及 \`uboot-bin/\` 里的 U-Boot 合集：修改版 / 官方版 / loong1996，解压即用）
+          - 只要 exe：\`xe-pon-flash-toolkit-v${VER}.exe\`（tcboot.bin 已内置，开箱即用；不含 \`uboot-bin/\`）
+          - **HG5585F / HG5382A（华邦闪存）**：先刷 \`uboot-bin/修改版/\` 里的临时引导，
+            进系统后立刻换刷 \`uboot-bin/官方版/\` 里的官方引导 —— 先临时后官方，
+            能最大限度避免「刷完进不去系统、只能 TTL 救砖」
           - 校验：见附件 \`SHA256SUMS.txt\`（在解压出来的目录里执行 \`sha256sum -c SHA256SUMS.txt\`）
           - 用法：先把光猫恢复出厂设置（按住 reset 20 秒以上），
             再把铭牌上的账号密码填进界面，按步骤操作即可
           - 详细说明见 [README](https://github.com/${{ github.repository }}#readme)
+          - 许可：**AGPL-3.0-only**。老版本用的是 WTFPL v2，本版本起换成 AGPL-3.0。
+            自己刷机、自己改着玩都不受影响；改了之后再对外发布，请一并提供源码
 
           > 刷机有风险，请先完整备份。默认模式只开 Telnet / FTP 和备份，不会写入任何分区。
           EOF

@@ -6,8 +6,27 @@
 """
 import configparser
 import os
+import sys
 
 CONFIG_FILE = "config.ini"
+
+
+def resource_dir():
+    """可写的工作目录：exe 所在目录（或源码目录）。
+
+    为什么 config.py 也要有一份：GUI、命令行、打包 exe 三种跑法必须读写
+    **同一个** config.ini。程序会在运行时改这个文件（例如把顺延后的 HTTP
+    端口写回去），如果有一边用了 CWD 相对路径，就会出现「GUI 里存的端口，
+    命令行读不到」这种查不出来的怪事。所以统一走这里，别自己拼路径。
+    """
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def config_path():
+    """config.ini 的完整路径。"""
+    return os.path.join(resource_dir(), CONFIG_FILE)
 
 # 默认值（与 flash.py 配置区保持一致，XG-040G-MD 移动版实测值）
 DEFAULTS = {
@@ -62,6 +81,23 @@ DEFAULTS = {
         "port": "",            # 例如 /dev/ttyUSB0（Linux）或 COM3（Windows）
         "baudrate": "115200",
     },
+    # TTL + XMODEM 救砖（第三个标签页）。
+    # 为什么单独一段而不是复用 [serial]：这里解决的不是「登进去执行命令」，
+    # 而是设备根本起不来、只能守在串口上的场景 —— 刷完 U-Boot 后 Winbond
+    # 颗粒的机型 BL2 读不出 fip 卷，会一直循环打印
+    #   Press x to load BL31 + U-Boot FIP via XMODEM
+    # 这一页就是把 FIP 通过 XMODEM 送进内存，让 U-Boot 先起来去重建 UBI。
+    "rescue": {
+        # 要送进设备的 FIP（bl31 + u-boot）。留空 = 运行时自动找。
+        "fip": "",
+        # 等设备打印 "Press x" 的秒数。到点还没等到也照样发 x：设备可能早就
+        # 停在提示符上了，只是不再重复打印（BL2 只打一次就等）。
+        "wait": "30",
+        # 传完后继续监听多少秒，用来判断 U-Boot 是否真的起来了。
+        "after": "20",
+        # 「只看日志」按钮听多少秒后自动停（GUI 里没法给后台线程发 Ctrl+C）。
+        "monitor_seconds": "15",
+    },
     "safety": {
         # 刷机开关：默认关闭，必须在 GUI 里显式勾选才能解锁刷机按钮
         "allow_flash": "false",
@@ -76,6 +112,19 @@ DEFAULTS = {
         "flash_verify_timeout": "120",     # 最长轮询秒数
         "flash_verify_interval": "5",      # 每次回读间隔秒数
     },
+    # 主机侧的临时服务。这些是「程序在自己机器上开的服务」，不是光猫的设置，
+    # 单独一段以免和 [device]（光猫地址）混淆。
+    "net": {
+        # 临时 HTTP 服务器端口：程序把固件 / stock2ubi 送到光猫、或者接光猫
+        # 推回来的分区备份，都靠这个服务器。
+        #
+        # 这一项会被程序自己改：默认 8080，若被别的软件占用（实测有人的 8080
+        # 被中国电信「星辰智能体」常驻），程序会往后顺延到第一个空闲端口
+        # （8081、8082…）并把结果写回这里，下次启动直接复用。
+        # 所以用户只需要照提示去防火墙放行**一次**，之后一直有效。
+        # 手动填一个固定端口也可以，填了就以它为首选。
+        "http_port": "8080",
+    },
 }
 
 _SECTION_COMMENTS = {
@@ -84,7 +133,9 @@ _SECTION_COMMENTS = {
     "super": "网页超级管理员账号（用于自动开启 Telnet / FTP）",
     "fh": "烽火 / AN7581 家族（第二个标签页）",
     "serial": "TTL 串口（拆机接线）",
+    "rescue": "TTL / XMODEM 救砖（第三个标签页）",
     "safety": "安全开关",
+    "net": "主机侧临时服务（端口被占用时程序会自动顺延并改写这里）",
 }
 
 def _new_config():
@@ -184,6 +235,13 @@ def apply_to_flash(cfg, flash):
         cfg, "safety", "auto_reboot_on_login_fail", True)
     try:
         flash.AUTO_REBOOT_MAX = max(0, int(cfg.get("safety", "auto_reboot_max")))
+    except Exception:
+        pass  # 非数字就沿用 flash.py 的默认值
+
+    # 主机临时 HTTP 服务器端口。程序在端口被占用时会顺延并写回 config.ini，
+    # 这里照读即可 —— 顺延过的值下次就是首选值。
+    try:
+        flash.LOCAL_HTTP_PORT = int(cfg.get("net", "http_port"))
     except Exception:
         pass  # 非数字就沿用 flash.py 的默认值
 

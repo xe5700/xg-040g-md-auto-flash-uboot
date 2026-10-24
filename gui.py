@@ -11,11 +11,12 @@
 """
 import os
 import queue
+import re
 import sys
 import threading
 import tkinter as tk
 import webbrowser
-from tkinter import ttk, messagebox, scrolledtext
+from tkinter import ttk, messagebox, scrolledtext, filedialog
 
 import config as cfgmod
 import models as models_mod
@@ -29,15 +30,28 @@ except Exception:  # 打包漏了 version.py 时不能让 GUI 起不来
 APP_TITLE = "邪恶的光猫刷机工具箱"
 APP_TITLE_FULL = f"{APP_TITLE} v{VERSION}"
 
+# 项目主页。界面上必须把它摆出来：这工具是免费开源的，咸鱼上那些「倒卖」
+# 的二道贩子卖的就是同一个东西，用户点两下就能自己去下。
+PROJECT_REPO = "xe5700/xg-040g-md-auto-flash-uboot"
+PROJECT_URL = "https://github.com/" + PROJECT_REPO
+PROJECT_HOME_TEXT = "本项目完全免费、开源："
+PROJECT_STAR_HINT = "（点开链接，顺手进去点个 ⭐ Star 就是对作者最大的支持）"
+PROJECT_SCALPER_NOTE = (
+    "闲鱼上「倒卖」这个工具的都是二道贩子：工具本身免费、代码全部开源，"
+    "在项目主页就能直接下载，不用花冤枉钱。（遇到问题也请以项目主页的说明为准，"
+    "二手卖家给的版本没人维护。）")
+
 
 def _resource_dir():
     """可写的工作目录：exe 所在目录（或源码目录）。
 
     config.ini、backup_* 都放这里，因为打包后 _MEIPASS 是只读临时目录。
+
+    实现直接复用 config.resource_dir()：flash.py 也会在运行中改写
+    config.ini（把顺延后的 HTTP 端口写回去），两边必须是同一个文件，
+    各写一份相同的判断迟早会漂移。
     """
-    if getattr(sys, "frozen", False):
-        return os.path.dirname(sys.executable)
-    return os.path.dirname(os.path.abspath(__file__))
+    return cfgmod.resource_dir()
 
 
 def _bundle_dir():
@@ -56,6 +70,151 @@ def find_resource(name):
         if os.path.isfile(p):
             return p
     return None
+
+
+# ===== 华邦（Winbond）闪存专项说明 =====
+# 这段文案要在机型 tab、救砖 tab 里重复出现，所以只写一份，避免改一处漏两处。
+#
+# v2.4.0 起结论变了，别再按旧说法走：
+#   旧：临时引导只兼容华邦颗粒，非华邦机型刷了会砖 —— 所以写了「非华邦千万别刷」。
+#   新：临时引导已适配所有闪存颗粒，照刷不会坏；而它同时还是把华邦机型从
+#       「原厂 8bit 写 / 新 BL2 4bit 读」那个死局里拉出来的办法。
+#   于是 HG5585F / HG5382A 的建议统一成「先刷修改版临时引导，进系统后立刻
+#   换刷官方版」—— 分两步走，能把软砖概率压到最低。
+# 临时引导和官方引导都由 uboot_release.py 从上游下好、随 zip 一起发，
+# 解压后在 exe 同级的这两个目录里：
+UBOOT_MODIFIED_DIRNAME = "修改版"
+UBOOT_OFFICIAL_DIRNAME = "官方版"
+UBOOT_MODIFIED_DIR = "uboot-bin/" + UBOOT_MODIFIED_DIRNAME
+UBOOT_OFFICIAL_DIR = "uboot-bin/" + UBOOT_OFFICIAL_DIRNAME
+
+# 烽火 tab 就是 HG5585F 电信版，所以这两个文件名用 ct 那份；
+# cu / HG5382A 只是机型段不同，目录里的文件名一一对应。
+WINBOND_PRELOADER_TMP = \
+    "an7581-fiberhome-hg5585f-ct-preloader-tmp-8bit-read-4bit-write.bin"
+WINBOND_UBOOT_TMP = \
+    "an7581-fiberhome-hg5585f-ct-bl31-u-boot-tmp-8bit-read-4bit-write.fip"
+
+# 刷机页（机型 tab）用的完整版
+WINBOND_NOTE_FULL = (
+    "⚠️ HG5585F / HG5382A：先刷「修改版」临时引导，进系统后换刷「官方版」\n"
+    "\n"
+    "华邦 W29N02KVSIAF 这颗料，原厂 tcboot/BL2 与原厂内核都按 8 bit/512B 的\n"
+    "BCH 强度写 NAND；官方 preloader 从 v2026.07-3 起把它的 soc_ecc_ability\n"
+    "改成了 4 bit/512B。BL2 用 4bit 去读原厂按 8bit 写进去的 fip 卷会直接失败，\n"
+    "串口上一直循环这两行：\n"
+    "    ERROR: Stored BL31 + U-Boot FIP failed (-2)\n"
+    "    Press x to load BL31 + U-Boot FIP via XMODEM\n"
+    "\n"
+    "所以这两款机型请分两步刷，别想一次刷到位：\n"
+    "  第 1 步：先刷本项目改过的临时引导（8bit 读 / 4bit 写），\n"
+    "          它能把机器从上面那个死局里拉出来：\n"
+    "              " + UBOOT_MODIFIED_DIR + "/\n"
+    "  第 2 步：进系统之后，立刻进恢复页换刷官方引导长期使用：\n"
+    "              " + UBOOT_OFFICIAL_DIR + "/\n"
+    "先临时、后官方，能把「刷完进不去系统、只能 TTL 救砖」的概率压到最低。\n"
+    "\n"
+    "临时引导现在已经适配了所有闪存颗粒（东芝 / 镁光等机型刷它也不会坏），\n"
+    "所以不用再纠结自己的机器是不是华邦的料 —— 按机型选对文件就行。\n"
+    "但它只是过渡：刷完一定要换上官方引导，别长期留在临时版上。"
+)
+
+# 救砖 tab 用的版本。
+# 注意：**这里一定不要推荐修改版（临时引导）**。
+# 用户砖到这个界面，多半就是给华邦颗粒的机器刷了官方 U-Boot：原厂固件按
+# 8bit 写 NAND、官方 BL2 按 4bit 读，读不出原厂写进去的 fip 卷。
+# 救砖要做的是把机器拉回标准状态 —— 送官方引导 + 重建 UBI。XMODEM 是把 FIP
+# 直接送进内存、不经过 NAND 读取，所以官方版在这一步照样起得来；把修改版塞进
+# 救砖流程只会让用户在两种引导之间来回横跳。
+WINBOND_NOTE_SHORT = (
+    "⚠️ HG5585F / HG5382A：这里送「官方版」的引导，不要用修改版\n"
+    "会砖到需要救砖，多半是因为给华邦（Winbond）颗粒的机器刷了官方 U-Boot：\n"
+    "原厂固件按 8 bit/512B 写 NAND，官方 BL2 从 v2026.07-3 起按 4 bit/512B 读，\n"
+    "读不出原厂写进去的 fip 卷，于是串口一直循环：\n"
+    "    ERROR: Stored BL31 + U-Boot FIP failed (-2)\n"
+    "    Press x to load BL31 + U-Boot FIP via XMODEM\n"
+    "\n"
+    "救砖直接用官方引导：\n"
+    "    " + UBOOT_OFFICIAL_DIR + "/\n"
+    "XMODEM 是把 FIP 直接送进内存、不经过 NAND，所以这一步官方版一定跑得起来。\n"
+    "跑起来之后按下面第 ④ 块进恢复页重建 UBI 并重刷，机器就回到标准状态了。\n"
+    "（「修改版」的临时引导是刷机流程里用的，见「烽火 HG5585F 电信版」tab。）"
+)
+
+# 贝尔 tab 用的版本：贝尔这几款不在华邦死局的确认名单里，直接刷官方引导即可，
+# 所以这里不再是警告，只是告诉用户「出问题了去哪找」。
+WINBOND_NOTE_BEL = (
+    "这两款机型的引导直接刷「官方版」就行：\n"
+    "    " + UBOOT_OFFICIAL_DIR + "/\n"
+    "贝尔 XG-040G-MD / XG-140G-MD / XG-040G-MF / XG-040G-TF 都不在上面的\n"
+    "华邦死局确认名单里（名单是烽火的 HG5585F / HG5382A）。\n"
+    "万一串口上出现 Stored BL31 + U-Boot FIP failed (-2) 这个循环，说明这台\n"
+    "机器的颗粒也是「原厂 8bit 写、新 BL2 4bit 读」，就照着「烽火 HG5585F\n"
+    "电信版」tab 里红框那段走「先临时、后官方」；本工具的「TTL / XMODEM 救砖」\n"
+    "tab 也能把临时引导直接送进机器。"
+)
+
+# 救砖 tab：解释为什么「刷 preloader / firstblock」那两个按钮平时用不到
+NO_SHORT_NOTE = (
+    "ℹ️ 这两个按钮现在用不上，也不用为此去短接闪存引脚\n"
+    "它们对应「从 TTL 直接写 preloader / firstblock」，需要先短接闪存引脚让 SoC\n"
+    "停在 BootROM，本工具还没实现。\n"
+    "\n"
+    "但绝大多数情况下你并不需要它们：单独刷 preloader 一般不会把机器刷坏，\n"
+    "只是紧接着那次 bl31/u-boot 的写入会失败。换句话说机器里通常已经有\n"
+    "preloader 了 —— 这种情况下不用短接、也不用进 preloader 模式，\n"
+    "直接用上面的「刷入 U-Boot」把 bl31 + u-boot.fip 送进去就行。"
+)
+
+
+def _is_modified_uboot(path):
+    """这个 FIP / preloader 是不是本项目改过的「修改版」（8bit 读 / 4bit 写）？
+
+    文件名和目录名双重判断：uboot_release.py 会把它们放进 uboot-bin/修改版/，
+    文件名里也带 -tmp-8bit-read-4bit-write。用户手动改名或挪位置时，任意一条
+    命中就算修改版 —— 救砖那边宁可保守一点，把话说死比让用户猜强。
+    """
+    base = os.path.basename(path).lower()
+    if "-tmp-8bit-read-4bit-write" in base:
+        return True
+    parts = [q.lower() for q in os.path.normpath(path).split(os.sep)]
+    return UBOOT_MODIFIED_DIRNAME.lower() in parts
+
+
+# 传完 FIP、U-Boot 跑起来之后给用户的下一步。界面上第④块和成功后的弹窗
+# 共用这一份，免得两处说法不一致。
+# 关键一点：这时设备**已经在 U-Boot 里**了，不用重启就能直接往下走。
+RESCUE_OK_NEXT = (
+    "U-Boot 已经跑起来了 —— 设备就在 U-Boot 里等着你，不用重启。\n\n"
+    "  1. 直接在当前串口按 Ctrl+C 打断，敲 httpd dhcp 进 WebUI；\n"
+    "     （或者按住 reset 进恢复模式，两条路等效）\n"
+    "  2. 浏览器打开 http://192.168.0.1/，按页面流程重建 UBI 并重刷；\n"
+    "     （HG5585F / HG5382A：重建 UBI 会把引导一并按新方式写回去，\n"
+    "       重刷完这台机器就回到标准状态了）\n"
+    "  3. 验收标准：拔掉 TTL 线，断电重启三次，次次能自己起来。\n\n"
+    "做不到第 3 步，说明 bootstrap 那一层仍是原厂内核按 8bit 写进去的，"
+    "4bit 的 BL2 读不出来 —— 见 NAND-ECC-问题报告.md 第六节。")
+
+
+# ---------- 运行日志的降噪规则 ----------
+# 刷错 ubi 分区 / uboot 之后，设备会哗哗地刷同一条报错，只有 PEB 号或地址不同，
+# 例如：
+#   ubi0 error: ubi_io_read: error -74 (ECC error) while reading 64 bytes from PEB 1690:0, ...
+# 这类行折成一条并在行尾标次数，否则 Text 控件会被几百次重绘拖死。
+# 把地址和 4 位以上的数字抹掉，「同一个错、不同块号」就算同一行。
+_LOG_ADDR = re.compile(r"0x[0-9a-fA-F]+|\b\d{4,}\b")
+
+# (名字, 命中规则, 给用户的一句话)。每种只提示一次，免得跟着刷屏一起重复。
+_LOG_HINTS = (
+    ("ubi",
+     re.compile(r"ubi0? error|ubi_io_read|UBI error|No volume named fip|ubi_attach",
+                re.I),
+     "[!] 你目前 ubi 分区是错误的，需要重建为正确的 ubi 分区。"),
+    ("uboot",
+     re.compile(r"Stored BL31 \+ U-Boot FIP failed|Failed to load image id|"
+                r"Press x to load BL31|nand_read.*fail|failed with -1", re.I),
+     "[!] 你目前刷入了错误的 uboot，需要救砖刷入正确的对应 uboot。"),
+)
 
 
 class LogRedirector:
@@ -108,8 +267,17 @@ class App:
         _set_window_icon(self.root)
 
         self.log_queue = queue.Queue()
+        # 日志降噪用的状态：上一次的「特征行」、已重复几次、那条的行号
+        self._log_buf = ""          # 没写完的半行，等下一批补齐
+        self._log_key_last = None
+        self._log_last = ""
+        self._log_repeat = 0
+        self._log_idx = 0           # 上面那条在 Text 里的行号，重复时原地改它
+        self._log_dirty = False
+        self._log_hinted = set()    # 已经提示过的报错种类
         self.worker = None
         self.flash = None          # 延迟导入 flash，避免启动时就做网络探测
+        self.rescue = None         # 同理，ttl_rescue 也是点按钮时才导入
 
         self.cfg = cfgmod.load(os.path.join(_resource_dir(), cfgmod.CONFIG_FILE))
         self.vars = {}
@@ -173,8 +341,37 @@ class App:
         lbl.pack(fill="x", padx=8, pady=6)
         return lbl
 
+    # 提示框配色：danger=必砖红线 / warn=要注意 / info=说明 / ok=推荐做法
+    _NOTE_STYLES = {
+        "danger": ("#fdecea", "#d93025", "#a50e0e"),
+        "warn": ("#fff8e1", "#e0c060", "#8a6d00"),
+        "info": ("#eef4fb", "#7aa7d9", "#1b4a7a"),
+        "ok": ("#e8f5e9", "#7cc47f", "#1e5b23"),
+    }
+
+    def _note_box(self, parent, text, kind="warn", bold=True, pady=(6, 0)):
+        """带底色的说明块。
+
+        跟 _tip_bar 的区别：_tip_bar 是整页顶部常驻的「使用前提」，一个 tab 只
+        该有一条；这个是可叠加的段落级提示，一个 tab 里能放好几块。
+        """
+        bg, border, fg = self._NOTE_STYLES[kind]
+        box = tk.Frame(parent, bg=bg, highlightbackground=border,
+                       highlightthickness=1)
+        box.pack(fill="x", pady=pady)
+        tk.Label(box, bg=bg, fg=fg, justify="left", anchor="w",
+                 wraplength=920, font=("", 10, "bold") if bold else ("", 10),
+                 text=text).pack(anchor="w", padx=8, pady=6)
+        return box
+
     def _build_ui(self):
-        # 顶层：上面是 Notebook（两个机型 tab），下面是共用的日志框。
+        # 串口变量必须**先**建：第三个 tab（TTL 救砖）的控件要拿它们当
+        # textvariable，放到方法末尾会 AttributeError。
+        self.serial_on = tk.BooleanVar(value=False)
+        self.serial_port = tk.StringVar(value="")
+        self.serial_baud = tk.StringVar(value="115200")
+
+        # 顶层：上面是 Notebook（两个机型 tab + 一个救砖 tab），下面是共用日志框。
         # 为什么按机型分 tab 而不是一个表单切下拉框：两个厂商的流程差别太大
         # —— 贝尔要开 FTP 才能 su、要刷 tcboot.bin；烽火不用 FTP、刷写走
         # stock2ubi 网页且和备份合并成一步。放在一张表单里会有一半控件是
@@ -185,12 +382,20 @@ class App:
 
         tab_bel = ttk.Frame(notebook)
         tab_fh = ttk.Frame(notebook)
+        tab_ttl = ttk.Frame(notebook)
         notebook.add(tab_bel, text="  贝尔 XG-040G-MD / XG-140G-MD（移动版）  ")
         notebook.add(tab_fh, text="  烽火 HG5585F 电信版  ")
+        # 救砖 tab 独立成一页、而不是塞进两个机型 tab 里：
+        #   · 它和机型无关 —— 贝尔/烽火都是 AN7581，BL2 停在 "Press x" 的样子
+        #     一模一样，救砖流程没有任何区别；
+        #   · 正常情况下根本用不到它，放进机型 tab 会让只想刷机的用户看到
+        #     一堆「砖了才有用」的按钮。
+        notebook.add(tab_ttl, text="  TTL / XMODEM 救砖  ")
         notebook.bind("<<NotebookTabChanged>>", self._on_tab_change)
 
         self._build_bel_tab(self._make_scroll_tab(tab_bel))
         self._build_fh_tab(self._make_scroll_tab(tab_fh))
+        self._build_ttl_tab(self._make_scroll_tab(tab_ttl))
 
         # ===== 共用底部：配置按钮 + 日志 =====
         # bottom 不设 expand：否则它会和 Notebook 平分高度，把 tab 内容挤到
@@ -205,19 +410,37 @@ class App:
             side="left", padx=6)
         ttk.Button(bar, text="恢复默认", command=self.on_reset).pack(side="left")
 
+        # ===== 共用：项目主页 / Star 提示 =====
+        # 放共用区而不是塞进某个 tab 里：三个 tab 都该看到，而且这是「关于」
+        # 信息，不该跟着机型的表单一起滚走。
+        home = ttk.Frame(bottom)
+        home.pack(fill="x", pady=(8, 0))
+        row1 = ttk.Frame(home)
+        row1.pack(fill="x")
+        ttk.Label(row1, text=PROJECT_HOME_TEXT,
+                  foreground="#666").pack(side="left")
+        self._link_label(row1, PROJECT_REPO, PROJECT_URL).pack(side="left")
+        ttk.Label(row1, text=PROJECT_STAR_HINT,
+                  foreground="#666").pack(side="left")
+        # ⚠️ 单独一个 Label：Tk 会把 emoji 的宽度估得很大，跟正文放在同一个
+        # Label 里时它自己占一行、正文从下一行开始，很难看。
+        note_row = ttk.Frame(home)
+        note_row.pack(fill="x", pady=(2, 0))
+        tk.Label(note_row, text="⚠️", fg="#a50e0e",
+                 font=("", 9, "bold")).pack(side="left", anchor="n")
+        tk.Label(note_row, text=PROJECT_SCALPER_NOTE, fg="#a50e0e",
+                 font=("", 9, "bold"), anchor="w", justify="left",
+                 wraplength=950).pack(side="left", fill="x")
+
         logbox = ttk.LabelFrame(bottom, text="运行日志", padding=6)
         logbox.pack(fill="x", pady=(6, 0))
         self.log = scrolledtext.ScrolledText(
             logbox, height=8, wrap="word", state="disabled",
             font=("Consolas", 9))
+        # 报错提示要显眼，不然会淹没在被折叠的刷屏里
+        self.log.tag_configure("hint", foreground="#c62828",
+                               font=("Consolas", 9, "bold"))
         self.log.pack(fill="both", expand=True)
-
-        # TTL 串口控件按用户要求暂时不显示（功能未验证，代码保留）。
-        # 这些变量仍然存在，_load_into_ui / _serial_args 照旧能跑，
-        # 只是永远保持「未勾选」，所以不会走串口那条路。
-        self.serial_on = tk.BooleanVar(value=False)
-        self.serial_port = tk.StringVar(value="")
-        self.serial_baud = tk.StringVar(value="115200")
 
     # ---------- 贝尔 tab ----------
     def _build_bel_tab(self, outer):
@@ -375,6 +598,11 @@ class App:
                  "程序会在刷写前读取设备机型名，MF 机型会被直接拒绝。"
         ).pack(fill="x", padx=10, pady=8)
 
+        # 引导版本提示。v2.4.0 起贝尔这边不再是「华邦就会砖」的红框警告 ——
+        # 贝尔这几款不在死局确认名单里，官方引导直接刷就行，所以降级成信息框；
+        # 文案里留着「万一真出问题去哪找」的指路，免得用户自己乱试。
+        self._note_box(flashbox, WINBOND_NOTE_BEL, kind="info", bold=False, pady=(8, 0))
+
     # ---------- 烽火 tab ----------
     def _build_fh_tab(self, outer):
         self.fh_tip = self._tip_bar(
@@ -501,6 +729,8 @@ class App:
             ("1", "刷写 BL2",
              "上传 preloader.bin，点「上传并写入」。\n"
              "    文件名形如 an7581-fiberhome-hg5585f-ct-preloader.bin。\n"
+             "    ⚠️ HG5585F / HG5382A 请改用「修改版」里的临时版（见下方红框）：\n"
+             "    " + UBOOT_MODIFIED_DIR + "/" + WINBOND_PRELOADER_TMP + "\n"
              "    ⚠️ 建议用 preloader.bin，不要用 firstblock.bin ——\n"
              "    两者写入位置不同：preloader.bin 从 NAND 偏移 0x800 写入，\n"
              "    前 0x800 字节保持擦除态；firstblock.bin 从偏移 0x0 写入，\n"
@@ -508,7 +738,8 @@ class App:
             ("2", "重建 UBI",
              "点「重建 UBI」。这一步会清空 UBI 里的全部数据，属于正常现象 ——\n"
              "    首次刷机必须先重建，否则后面的分区写不进去。\n"
-             "    ⚠️ 重建前必须已经完成第 1 步（preloader 已写入），否则必砖！"),
+             "    ⚠️ 重建完 UBI 就是空的 —— 接着必须做完第 4 步刷入 U-Boot，\n"
+             "    否则第 6 步启动时 BL2 在 UBI 里找不到 fip 卷，起不来。"),
             ("3", "刷入板级数据 factory",
              "上传备份目录里的 factory-1m.bin（正好 1.0 MiB，程序自动生成），\n"
              "    点「上传并写入」。这是本机唯一的校准数据（PON 校准 + WiFi EEPROM），\n"
@@ -517,14 +748,17 @@ class App:
              "    这一栏只认 1.0 MiB。"),
             ("4", "刷写 U-Boot",
              "上传 bl31-u-boot.fip，点「上传并写入」。\n"
-             "    这个文件从 pbs05/uboot-an758x 发布页下载（见下方链接）。"),
+             "    官方版就在程序目录的 " + UBOOT_OFFICIAL_DIR + "/ 里（随 zip 一起发）。\n"
+             "    ⚠️ HG5585F / HG5382A 这一步先刷「修改版」的临时引导（见下方红框），\n"
+             "    进系统后再换刷官方版：\n"
+             "    " + UBOOT_MODIFIED_DIR + "/" + WINBOND_UBOOT_TMP),
             ("5", "刷写系统",
              "上传 QWRT 或 PONWRT 的固件（sysupgrade.bin / sysupgrade.itb），\n"
              "    点「上传并刷写」。"),
             ("6", "启动系统",
              "点「启动系统」。第一次启动较慢（约 1~3 分钟），不要因为没反应就断电。\n"
-             "    ⚠️ 点之前必须确认 preloader.bin 和 bl31-u-boot.fip 都已刷入成功，\n"
-             "    缺任何一个就点「启动系统」，必砖！"),
+             "    ⚠️ 点之前确认第 4 步的 bl31-u-boot.fip 已经刷入成功 —— U-Boot 不在\n"
+             "    UBI 里就起不来（这种情况接 TTL 用 XMODEM 送一份进去就能救回来）。"),
         )
         for num, title, detail in step_text:
             rowf = ttk.Frame(steps)
@@ -542,17 +776,17 @@ class App:
         tk.Label(
             brick, bg="#fdecea", fg="#a50e0e", justify="left", anchor="w",
             wraplength=920, font=("", 10, "bold"),
-            text="⚠️ 两条必砖红线：\n"
-                 "  1. 没刷入 preloader.bin 就点「重建 UBI」→ 必砖；\n"
-                 "  2. 没刷入 bl31-u-boot.fip 就点「启动系统」→ 必砖。\n"
-                 "重建 UBI 只清 UBI 里的数据，不动 preloader 和 U-Boot；"
-                 "但这两块 boot 区一旦缺失，\n重建后再也起不来，"
-                 "只能拆机接串口用 XMODEM 救砖。"
+            text="⚠️ 顺序上最容易出事的一条：重建 UBI 之后必须刷入 U-Boot。\n"
+                 "UBI 一重建，装在它 fip 卷里的 bl31-u-boot.fip 就没了；不补刷第 4 步，\n"
+                 "第 6 步「启动系统」只会一直循环报 Stored BL31 + U-Boot FIP failed。\n"
+                 "单独重建 UBI 本身不会把机器弄死：preloader 在 NAND 偏移 0x800 的\n"
+                 "主引导区、UBI 在另一块区域，两边互不影响。补上 U-Boot 就能起来，\n"
+                 "实在不行接一根 TTL 线用 XMODEM 把 fip 送进内存也救得回来。"
         ).pack(anchor="w", padx=8, pady=6)
 
         # firstblock.bin 的专项警告（用户反馈：这个成功率低、容易砖）。
-        # 单独一块而不是塞进第 1 步里，是因为它和第 1 步的「必砖红线」不是
-        # 一个性质：红线是「不刷就砖」，这里是「刷了也可能砖，所以别用」。
+        # 单独一块而不是塞进第 1 步里，是因为它和「重建后必须刷 U-Boot」不是
+        # 一个性质：那条是「顺序别搞错」，这里是「刷了就可能砖，所以别用」。
         #
         # 两者的真正区别是写入位置（据 uboot-an758x 作者的说明）：
         #   firstblock.bin → 从 NAND 偏移 0x0 写，覆盖开头 0x800 字节；
@@ -576,6 +810,11 @@ class App:
                  "写错就起不来，实测成砖率高得多。\n"
                  "除非你明确知道自己在做什么、且有 XMODEM 救砖条件，否则别碰 firstblock.bin。"
         ).pack(anchor="w", padx=8, pady=6)
+
+        # ===== 华邦闪存专项（用户要求：刷机页面上必须提示）=====
+        # 放在第 1/第 4 步的正下方：这两步分别要选 preloader 和 bl31-u-boot.fip，
+        # 而华邦机型这两个文件都得换成临时版，提示贴着它们最不容易看漏。
+        self._note_box(steps, WINBOND_NOTE_FULL, kind="danger", pady=(6, 0))
 
         ttk.Label(
             steps, foreground="#666", wraplength=940, justify="left",
@@ -627,6 +866,132 @@ class App:
         ).pack(fill="x", padx=10, pady=8)
 
     # ---------- 账号行（两个 tab 共用）----------
+    # ---------- TTL / XMODEM 救砖 tab ----------
+    def _build_ttl_tab(self, outer):
+        self._tip_bar(
+            outer,
+            "用途：Winbond 颗粒（W29N02KVSIAF）的机型刷完 U-Boot 后起不来 —— "
+            "BL2 读不出 fip 卷，会一直循环打印\n"
+            "    ERROR: Stored BL31 + U-Boot FIP failed\n"
+            "    Press x to load BL31 + U-Boot FIP via XMODEM\n"
+            "这时接上 USB-TTL 线（GND→GND、RX→TX、TX→RX），用本页把 U-Boot "
+            "通过 XMODEM 送进内存，设备就能起来进 Web 恢复模式。\n"
+            "这条路不需要 telnet、不需要超级密码、也不需要网线 —— "
+            "设备本身已经停在那儿等文件了。\n"
+            "⚠️ 华邦（Winbond）闪存的机器，FIP 请改用本项目做的临时版"
+            "（8bit 读 / 4bit 写），见本页最后的红框。")
+
+        # ===== ① 串口 =====
+        sp = ttk.LabelFrame(outer, text="① 串口（USB-TTL 线）", padding=8)
+        sp.pack(fill="x", pady=(8, 0))
+
+        r1 = ttk.Frame(sp)
+        r1.pack(fill="x")
+        ttk.Label(r1, text="串口：").pack(side="left")
+        # 用可编辑的 Combobox 而不是只读下拉：既能从「刷新」列出的设备里选，
+        # 也能手打 /dev/ttyUSB0 或 COM3（有些系统枚举不出来，只能手填）。
+        self.serial_combo = ttk.Combobox(r1, textvariable=self.serial_port,
+                                         width=24)
+        self.serial_combo.pack(side="left")
+        self.btn_rescue_refresh = ttk.Button(
+            r1, text="刷新", width=8, command=self.on_refresh_ports)
+        self.btn_rescue_refresh.pack(side="left", padx=6)
+        ttk.Label(r1, text="波特率：").pack(side="left", padx=(10, 0))
+        ttk.Entry(r1, textvariable=self.serial_baud, width=10).pack(side="left")
+        ttk.Label(r1, text="（AN7581 只认 115200，改了会收不到 C）",
+                  foreground="#777").pack(side="left", padx=6)
+
+        self.serial_hint = ttk.Label(sp, text="", foreground="#666",
+                                     justify="left", wraplength=840)
+        self.serial_hint.pack(fill="x", pady=(6, 0))
+
+        # ===== ② 文件 =====
+        fp = ttk.LabelFrame(outer, text="② 要送进设备的文件", padding=8)
+        fp.pack(fill="x", pady=(8, 0))
+
+        r2 = ttk.Frame(fp)
+        r2.pack(fill="x")
+        self.fip_var = tk.StringVar()
+        self.vars[("rescue", "fip")] = self.fip_var
+        ttk.Entry(r2, textvariable=self.fip_var).pack(
+            side="left", fill="x", expand=True)
+        self.btn_rescue_browse = ttk.Button(
+            r2, text="浏览…", width=8, command=self.on_rescue_browse)
+        self.btn_rescue_browse.pack(side="left", padx=6)
+        self.btn_rescue_find = ttk.Button(
+            r2, text="自动查找", width=10, command=self.on_rescue_autofind)
+        self.btn_rescue_find.pack(side="left")
+
+        self.fip_hint = ttk.Label(fp, text="", foreground="#666",
+                                  justify="left", wraplength=840)
+        self.fip_hint.pack(fill="x", pady=(6, 0))
+        self.fip_var.trace_add("write", lambda *_: self._update_fip_hint())
+
+        # ===== ③ 操作 =====
+        op = ttk.LabelFrame(outer, text="③ 操作", padding=8)
+        op.pack(fill="x", pady=(8, 0))
+
+        r3 = ttk.Frame(op)
+        r3.pack(fill="x")
+        self.btn_rescue_uboot = ttk.Button(
+            r3, text="刷入 U-Boot（bl31 + u-boot.fip）", width=34,
+            command=self.on_rescue_uboot)
+        self.btn_rescue_uboot.pack(side="left")
+        ttk.Label(r3, text="← 把 FIP 通过 XMODEM 送进内存并直接启动",
+                  foreground="#777").pack(side="left", padx=6)
+
+        r4 = ttk.Frame(op)
+        r4.pack(fill="x", pady=(8, 0))
+        ttk.Label(r4, text='等待 "Press x" 提示：').pack(side="left")
+        wvar = tk.StringVar()
+        self.vars[("rescue", "wait")] = wvar
+        ttk.Entry(r4, textvariable=wvar, width=6).pack(side="left")
+        ttk.Label(r4, text="秒").pack(side="left", padx=(2, 14))
+        ttk.Label(r4, text="传完后继续监听：").pack(side="left")
+        avar = tk.StringVar()
+        self.vars[("rescue", "after")] = avar
+        ttk.Entry(r4, textvariable=avar, width=6).pack(side="left")
+        ttk.Label(r4, text="秒").pack(side="left")
+        ttk.Label(r4, text="（设备早就停在提示符上时不会重复打印，"
+                           "等够了会直接发 x）", foreground="#777").pack(
+            side="left", padx=8)
+
+        r5 = ttk.Frame(op)
+        r5.pack(fill="x", pady=(8, 0))
+        self.btn_rescue_monitor = ttk.Button(
+            r5, text="只看日志（检查线接对没有）", width=28,
+            command=self.on_rescue_monitor)
+        self.btn_rescue_monitor.pack(side="left")
+        ttk.Label(r5, text="不发任何数据，只把设备现在打印的东西显示出来；"
+                           "全是乱码时会提示检查接线。", foreground="#777").pack(
+            side="left", padx=6)
+
+        r6 = ttk.Frame(op)
+        r6.pack(fill="x", pady=(8, 0))
+        self.btn_rescue_pre = ttk.Button(
+            r6, text="刷入 preloader", width=20, state="disabled")
+        self.btn_rescue_pre.pack(side="left")
+        self.btn_rescue_fb = ttk.Button(
+            r6, text="刷入 firstblock", width=20, state="disabled")
+        self.btn_rescue_fb.pack(side="left", padx=6)
+        ttk.Label(r6, text="（暂未实现；要短接闪存引脚才能用，"
+                           "但一般来说你也用不到 —— 见下方说明）",
+                  foreground="#a00").pack(side="left", padx=6)
+
+        # 用户明确要求：这里必须讲清楚「不用去短接、也不用进 preloader 模式」。
+        # 那两个按钮存在的最坏后果是用户以为「没刷 preloader 就不能救」，
+        # 于是去拆机短接引脚 —— 而实际流程里 preloader 早就已经在了。
+        self._note_box(op, NO_SHORT_NOTE, kind="info", bold=False, pady=(8, 0))
+        self._note_box(op, WINBOND_NOTE_SHORT, kind="danger", pady=(6, 0))
+
+        # ===== ④ 传完之后 =====
+        nxt = ttk.LabelFrame(
+            outer, text="④ 传完 FIP 之后（设备已经在 U-Boot 里，不用重启）",
+            padding=8)
+        nxt.pack(fill="x", pady=(8, 0))
+        ttk.Label(nxt, justify="left", anchor="w", wraplength=840,
+                  text=RESCUE_OK_NEXT).pack(fill="x")
+
     def _build_account_rows(self, parent, rows, mac_probe=False):
         """按 (section, key, label, secret, hint) 生成表单行。
 
@@ -697,6 +1062,14 @@ class App:
 
     def _on_tab_change(self, *_):
         """切 tab 时同步 self.model 并存进配置（下次启动回到这个 tab）。"""
+        try:
+            idx = self.notebook.index(self.notebook.select())
+        except Exception:
+            idx = 0
+        if idx == 2:
+            # 第三个 tab（TTL 救砖）跟机型无关，切过去不能改用户的机型 ——
+            # 否则去救砖页看一眼回来，贝尔/烽火的账号密码就被换掉了。
+            return
         fam = self._current_family()
         self.model = models_mod.get("hg5585f" if fam == "fh" else "bel")
         self.cfg.set("device", "model", self.model.key)
@@ -808,6 +1181,10 @@ class App:
         saved_port = self.cfg.get("serial", "port").strip()
         if saved_port:
             self.serial_port.set(saved_port)
+        # 救砖 tab：把保存的 FIP 状态显示出来，并顺手枚举一次串口
+        self._update_fip_hint()
+        if getattr(self, "serial_combo", None) is not None:
+            self.on_refresh_ports()
         self._apply_model_to_ui()
 
     def _save_from_ui(self):
@@ -821,6 +1198,11 @@ class App:
                      "true" if self.serial_on.get() else "false")
         self.cfg.set("serial", "port", self.serial_port.get().strip())
         self.cfg.set("serial", "baudrate", self.serial_baud.get() or "115200")
+        # 临时 HTTP 端口由程序在运行时决定（8080 被占用会顺延并写盘）。这里
+        # 以 flash 模块里的实际值为准，否则用户一点「保存配置」就把它打回
+        # 8080，下次又得重新探测、还得重新去防火墙放行。
+        self.cfg.set("net", "http_port",
+                     str(getattr(self.flash, "LOCAL_HTTP_PORT", 8080)))
         cfgmod.save(self.cfg, os.path.join(_resource_dir(), cfgmod.CONFIG_FILE))
 
     def on_toggle_auto_reboot(self):
@@ -923,21 +1305,78 @@ class App:
             "也可以照光猫背面标签手工填写 MAC。")
 
     # ---------- 日志 ----------
+    # Text 控件最怕「一行一次 insert」：串口刷屏时几百行就是几百次重绘加滚动条
+    # 更新，界面直接卡住。这里改成三条：攒一批再写、逐行折叠同一条报错、
+    # 每种报错只提示一次。
     def log_line(self, text):
         self.log_queue.put(text)
 
+    def _log_key(self, line):
+        """抹掉地址/块号，让「同一个错、不同块号」算出同一个特征。"""
+        return _LOG_ADDR.sub("#", line).strip()
+
+    def _log_flush_repeat(self):
+        """把重复次数补写到那一条的行尾（原地改一行，不新开行）。"""
+        if self._log_idx <= 0 or self._log_repeat <= 1:
+            return
+        if not self._log_last.strip():
+            # 连续空行折叠掉就行，别在空行后面再挂个「×N」
+            return
+        self.log.delete(f"{self._log_idx}.0 linestart",
+                        f"{self._log_idx}.0 lineend")
+        self.log.insert(f"{self._log_idx}.0 linestart",
+                        f"{self._log_last}    … 同类重复 ×{self._log_repeat}\n")
+
+    def _log_one(self, line):
+        key = self._log_key(line)
+        if key == self._log_key_last:
+            self._log_repeat += 1
+            self._log_dirty = True       # 先记下，等这批处理完只补写一次
+            return
+        self._log_key_last = key
+        self._log_repeat = 1
+        self._log_last = line
+        # 先取行号再插入：插进去以后 end 就跑到下一行去了
+        self._log_idx = int(self.log.index("end-1c").split(".")[0])
+        self.log.insert("end", line + "\n")
+        for name, pat, msg in _LOG_HINTS:
+            if name in self._log_hinted or not pat.search(line):
+                continue
+            self._log_hinted.add(name)
+            self.log.insert("end", msg + "\n", "hint")
+            break
+
+    def _log_feed(self, text):
+        buf = self._log_buf + text
+        if "\n" not in buf:
+            self._log_buf = buf          # 半行先留着，等下一批补齐
+            return
+        parts = buf.split("\n")
+        self._log_buf = parts.pop()      # split 的尾巴就是没写完的那半行
+        # 用户往上翻看历史时别把他拽回底部
+        at_bottom = self.log.yview()[1] >= 0.999
+        self.log.configure(state="normal")
+        for line in parts:
+            self._log_one(line)
+        if self._log_dirty:              # 一批最多补写一次，不是每个重复都写
+            self._log_flush_repeat()
+            self._log_dirty = False
+        self.log.configure(state="disabled")
+        if at_bottom:
+            self.log.see("end")
+
     def _pump_log(self):
+        # 一次把队列里积压的输出全取走，合成一段一次写完
+        chunk = []
         try:
             while True:
                 text = self.log_queue.get_nowait()
-                if text == "__DONE__":
-                    continue
-                self.log.configure(state="normal")
-                self.log.insert("end", text)
-                self.log.see("end")
-                self.log.configure(state="disabled")
+                if text != "__DONE__":
+                    chunk.append(text)
         except queue.Empty:
             pass
+        if chunk:
+            self._log_feed("".join(chunk))
         self.root.after(120, self._pump_log)
 
     # ---------- 线程与状态 ----------
@@ -946,7 +1385,10 @@ class App:
         # 两个 tab 的按钮都要跟着忙闲切换（漏掉某个会让它在运行时仍可点）
         for name in ("btn_telnet", "btn_ftp", "btn_backup", "btn_reboot",
                      "btn_stock2ubi", "btn_probe_mac", "btn_fh_telnet",
-                     "btn_fh_stock2ubi", "btn_fh_reboot", "btn_fh_report"):
+                     "btn_fh_stock2ubi", "btn_fh_reboot", "btn_fh_report",
+                     "btn_rescue_uboot", "btn_rescue_monitor",
+                     "btn_rescue_refresh", "btn_rescue_browse",
+                     "btn_rescue_find"):
             b = getattr(self, name, None)
             if b is not None:
                 b.configure(state=state)
@@ -1024,7 +1466,7 @@ class App:
 
     # ---------- TTL 串口（界面暂时隐藏，代码保留）----------
     def on_refresh_ports(self):
-        """重新枚举串口并填进下拉框（界面隐藏后只可能被代码调用）。"""
+        """重新枚举串口并填进下拉框（救砖 tab 的「刷新」按钮）。"""
         combo = getattr(self, "serial_combo", None)
         if combo is None:
             return
@@ -1040,9 +1482,15 @@ class App:
             self.serial_port.set("")
             return
         if not ports:
-            hint.configure(text="没有发现串口设备。请插上 USB-TTL 线，再点「刷新」。",
-                           foreground="#a00")
-            self.serial_port.set("")
+            # 只有本来就是空的才自动清空。用户手打过一个设备名（比如系统枚举
+            # 不出来的 /dev/ttyUSB3）时不能因为一次「刷新」就把它抹掉。
+            keep = (self.serial_port.get() or "").strip()
+            hint.configure(
+                text=("没有发现串口设备。请插上 USB-TTL 线，再点「刷新」。"
+                      + (f"（保留手填的 {keep}）" if keep else "")),
+                foreground="#a00")
+            if not keep:
+                self.serial_port.set("")
             return
         desc = "；".join(f"{dev} = {d}" for dev, d in ports)
         hint.configure(text=f"发现 {len(ports)} 个串口：{desc}", foreground="#666")
@@ -1364,9 +1812,11 @@ class App:
                 "       ⑤ 刷写系统 —— 上传 QWRT / PONWRT 的 sysupgrade\n"
                 "       ⑥ 启动系统（首次约 1~3 分钟，别断电）\n"
                 "  4. 重启后立刻访问 http://192.168.0.1 继续完成安装。\n\n"
-                "⚠️ 两条必砖红线：\n"
-                "   没刷 preloader.bin 就点「重建 UBI」→ 必砖；\n"
-                "   没刷 bl31-u-boot.fip 就点「启动系统」→ 必砖。\n\n"
+                "⚠️ 顺序上最容易出事的一条：\n"
+                "   重建 UBI 之后必须刷入 bl31-u-boot.fip（第 4 步）——\n"
+                "   UBI 一重建，里面 fip 卷的 U-Boot 就没了，不补刷就直接\n"
+                "   启动，只会一直循环报 Stored BL31 + U-Boot FIP failed。\n"
+                "   （单独重建 UBI 不会弄死机器，补上 U-Boot 就能起来。）\n\n"
                 "同一台设备（SN 相同）已有完整备份时会跳过下载。\n\n"
                 "⚠️ 整个过程绝对不能断电！\n"
                 "⚠️ 重启后若停在 192.168.0.1 恢复页却不继续安装，"
@@ -1421,6 +1871,256 @@ class App:
 
         self._start_worker(_worker)
 
+
+# ---------- TTL / XMODEM 救砖 ----------
+    # 每个机型在 GitHub Release 里的 FIP 文件名都带机型串。自动查找时按当前
+    # 机型的串优先，免得贝尔的机器被刷进烽火的 U-Boot（U-Boot 带设备树，
+    # 刷错了网口、LED、reset 键都会不对）。
+    _FIP_TOKENS = {
+        "hg5585f": ("hg5585f",),
+        "bel": ("xg-040g-md", "xg-140g-md"),
+    }
+
+    def _load_rescue(self):
+        if self.rescue is None:
+            import importlib.util
+            # 和 _load_flash 一样用 find_resource：打包成 exe 后 ttl_rescue.py
+            # 在解包目录里，同时优先用 exe 同目录那份，方便用户直接替换。
+            path = find_resource("ttl_rescue.py")
+            if not path:
+                raise FileNotFoundError("找不到 ttl_rescue.py（应与程序放在一起）")
+            spec = importlib.util.spec_from_file_location("ttl_rescue", path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            self.rescue = mod
+        return self.rescue
+
+    def _find_fips(self):
+        """在程序目录 / uboot-bin / _src/rel 里递归找 *bl31-u-boot.fip。
+
+        **故意不返回「修改版」的临时引导**（文件名带 -tmp-8bit-read-4bit-write，
+        或者躺在 uboot-bin/修改版/ 里）：救砖这条路要的是官方引导。
+        会砖到需要救砖，多半就是「原厂按 8bit 写、官方 BL2 按 4bit 读」那个
+        组合；而 XMODEM 是把 FIP 直接送进内存、根本不经过 NAND 读取，官方版
+        在这一步照样跑得起来。把修改版塞进救砖流程只会让用户在两种引导之间
+        来回横跳。修改版留给「烽火 HG5585F 电信版」tab 的刷机流程用。
+        """
+        seen, out = set(), []
+        # 注意：**不要**用 glob 的 `**` 递归。程序目录在开发机上就是整个仓库
+        # （_fw_rootfs / backup_* 有好几万个文件），递归 glob 会让界面卡住
+        # 十几秒甚至更久。这里用 os.walk + 深度上限 + 剪掉明显无关的目录。
+        skip_dirs = {".git", "__pycache__", "node_modules", ".venv", ".idea"}
+
+        def _walk_fips(root_dir, max_depth=3):
+            root_dir = os.path.abspath(root_dir)
+            base = root_dir.rstrip(os.sep).count(os.sep)
+            found = []
+            for dirpath, dirnames, filenames in os.walk(root_dir):
+                depth = dirpath.rstrip(os.sep).count(os.sep) - base
+                if depth >= max_depth:
+                    dirnames[:] = []          # 到底了，不再往下钻
+                else:
+                    dirnames[:] = [d for d in dirnames
+                                   if d not in skip_dirs and not d.startswith(".")]
+                for fn in filenames:
+                    if fn.endswith("bl31-u-boot.fip"):
+                        found.append(os.path.join(dirpath, fn))
+            return sorted(found)
+
+        for d in (os.path.join(_resource_dir(), "uboot-bin"),
+                  _resource_dir(),
+                  os.path.join(_resource_dir(), "_src", "rel"),
+                  os.path.join(_bundle_dir(), "uboot-bin"),
+                  _bundle_dir()):
+            if not os.path.isdir(d):
+                continue
+            # uboot-bin/ 拆成了「修改版 / 官方版」两个子目录，所以要往下找。
+            for p in _walk_fips(d):
+                rp = os.path.realpath(p)
+                if rp in seen or _is_modified_uboot(p):
+                    continue
+                seen.add(rp)
+                out.append(p)
+        return out
+
+    def _fip_path(self, raw=None):
+        """把输入框里的路径还原成真实可用的路径。
+
+        「自动查找」写进去的是**相对程序目录**的短路径（见 _preferred_fip），
+        这里要按程序目录还原；用户手输或用「浏览…」选的通常是绝对路径，
+        原样返回。相对当前工作目录的写法也保留，别把用户填的东西改没。
+        """
+        p = (raw if raw is not None else (self.fip_var.get() or "")).strip()
+        p = os.path.expanduser(p)
+        if not p or os.path.isabs(p):
+            return p
+        cand = os.path.join(_resource_dir(), p)
+        return cand if os.path.exists(cand) else p
+
+    def _preferred_fip(self):
+        """按当前机型挑一个 FIP；一个都没找到返回 None。
+
+        返回**相对程序目录**的路径（能相对就相对）：这个值会被存进
+        `config.ini`，写成绝对路径换台机器就失效了；界面上也会显示成
+        `/home/xxx/下载/...` 一长串，很难看。
+        """
+        cands = self._find_fips()
+        if not cands:
+            return None
+        tokens = self._FIP_TOKENS.get(self.model.key, ())
+        pick = None
+        for c in cands:
+            base = os.path.basename(c).lower()
+            if any(t in base for t in tokens):
+                pick = c
+                break
+        if pick is None:
+            pick = cands[0]
+        try:
+            rel = os.path.relpath(pick, _resource_dir())
+        except ValueError:            # Windows 上跨盘符会抛，直接用原路径
+            return pick
+        if rel.startswith(".."):      # 不在程序目录里，保留绝对路径
+            return pick
+        return rel.replace(os.sep, "/")
+
+    def _update_fip_hint(self):
+        lbl = getattr(self, "fip_hint", None)
+        if lbl is None:
+            return
+        p = (self.fip_var.get() or "").strip()
+        if not p:
+            lbl.configure(text="留空 = 运行时自动找 *bl31-u-boot.fip",
+                          foreground="#666")
+            return
+        # 自动查找填的是相对程序目录的短路径，显示短的那个、检查长的那个
+        real = self._fip_path(p)
+        if not os.path.isfile(real):
+            lbl.configure(text=f"文件不存在：{p}", foreground="#a00")
+            return
+        try:
+            size = os.path.getsize(real)
+            with open(real, "rb") as fh:
+                magic = fh.read(4)
+        except OSError as e:
+            lbl.configure(text=f"读不了这个文件：{e}", foreground="#a00")
+            return
+        # 所有 bl2/fip 容器的头 4 字节都是小端 0xAA640001。刷错文件是这里
+        # 唯一能在传送前就拦下来的错误，所以值得单独提示。
+        ok = len(magic) == 4 and int.from_bytes(magic, "little") == 0xAA640001
+        tail = ("开头是 FIP magic 0xAA640001 ✓" if ok else
+                f"⚠ 开头不是 FIP magic（实际 {magic.hex()}），可能不是 FIP 文件")
+        # 「自动查找」和列表里已经把修改版挡在外面了，但用户还能用「浏览…」手动
+        # 指到它，所以这里再拦一道：救砖要的是官方引导，选中修改版直接报警。
+        base = os.path.basename(p)
+        if _is_modified_uboot(p):
+            tail += (" · ⚠ 这是「修改版」临时引导，救砖请换成官方版："
+                     + UBOOT_OFFICIAL_DIR + "/")
+            ok = False
+        lbl.configure(text=f"{base} · {size:,} 字节 · {tail}",
+                      foreground="#666" if ok else "#a00")
+
+    def on_rescue_browse(self):
+        init = os.path.dirname(self._fip_path())
+        if not init or not os.path.isdir(init):
+            init = os.path.join(_resource_dir(), "uboot-bin")
+            if not os.path.isdir(init):
+                init = _resource_dir()
+        p = filedialog.askopenfilename(
+            parent=self.root, title="选择 bl31 + u-boot 的 FIP 文件",
+            initialdir=init,
+            filetypes=[("FIP 固件", "*.fip"), ("所有文件", "*.*")])
+        if p:
+            self.fip_var.set(p)
+
+    def on_rescue_autofind(self):
+        p = self._preferred_fip()
+        if not p:
+            messagebox.showwarning(
+                APP_TITLE,
+                "没找到 *bl31-u-boot.fip。\n\n"
+                "请把 FIP 放进程序目录或 uboot-bin/ 里，"
+                "或者点「浏览…」手动选。")
+            return
+        self.fip_var.set(p)
+
+    def _rescue_run(self, mod, argv, done):
+        """后台线程里跑救砖，成功就切回主线程回调。
+
+        messagebox 只能在主线程弹，后台线程里直接弹会把界面搞崩。
+        """
+        rc = mod.main(argv)
+        if rc == 0:
+            self.root.after(0, done)
+        return rc
+
+    def _rescue_done_dialog(self):
+        """传完 FIP 之后弹一次提示 —— 别让用户自己猜下一步。"""
+        messagebox.showinfo(APP_TITLE, RESCUE_OK_NEXT)
+
+    def _rescue_common(self, extra, label, done=None):
+        """救砖页所有按钮的公共前半段：找模块、校串口、存配置、起线程。
+
+        done 不为空时表示「跑成功之后要在主线程里做一件事」（现在是弹提示）。
+        """
+        try:
+            mod = self._load_rescue()
+        except Exception as e:
+            messagebox.showerror(APP_TITLE, f"无法加载救砖模块 ttl_rescue.py：{e}")
+            return
+        port = (self.serial_port.get() or "").strip()
+        if not port:
+            messagebox.showerror(
+                APP_TITLE,
+                "还没有选串口。\n\n插上 USB-TTL 线，点「刷新」，"
+                "再在下拉框里选一个（列不出来就直接手打，"
+                "如 /dev/ttyUSB0 或 COM3）。")
+            return
+        baud = (self.serial_baud.get() or "115200").strip() or "115200"
+        self._save_from_ui()
+        # --log 不带文件名：ttl_rescue 会自己写成 _out/ttl_rescue_时间戳.log，
+        # 乱码现场就算关了窗口也还留着证据。
+        argv = ["--port", port, "--baud", baud, "--log"] + list(extra)
+        self.log_line(f"\n{'=' * 56}\n[*] 开始：{label}"
+                      f"（串口 {port} @ {baud}）\n{'=' * 56}\n")
+        if done is None:
+            self._start_worker(mod.main, argv)
+        else:
+            self._start_worker(self._rescue_run, mod, argv, done)
+
+    def on_rescue_uboot(self):
+        """把 bl31 + u-boot 的 FIP 通过 XMODEM 送进内存。"""
+        fip = (self.fip_var.get() or "").strip()
+        if not fip:
+            fip = self._preferred_fip() or ""
+            if fip:
+                self.fip_var.set(fip)
+        fip = self._fip_path(fip)
+        if not fip or not os.path.isfile(fip):
+            messagebox.showerror(
+                APP_TITLE,
+                "没找到要送进设备的 FIP 文件。\n\n"
+                "点「自动查找」，或「浏览…」选一个 *bl31-u-boot.fip。")
+            return
+        if not messagebox.askyesno(
+                APP_TITLE,
+                f"确认通过 TTL 串口把下面这个文件送进光猫？\n\n"
+                f"{fip}\n{os.path.getsize(fip):,} 字节\n\n"
+                "传送过程中不要拔线、不要断电。\n"
+                "这一步只把 U-Boot 送进内存直接跑起来，不写 flash，"
+                "所以砖不会更严重 —— 但也还没真修好。"):
+            return
+        wait = (self.vars[("rescue", "wait")].get() or "30").strip() or "30"
+        after = (self.vars[("rescue", "after")].get() or "20").strip() or "20"
+        self._rescue_common(
+            ["--file", fip, "--wait", wait, "--after", after],
+            "XMODEM 刷入 U-Boot", done=self._rescue_done_dialog)
+
+    def on_rescue_monitor(self):
+        """只听不发：用来确认线接对了、波特率对了、设备在说什么。"""
+        secs = (self.cfg.get("rescue", "monitor_seconds") or "15").strip() or "15"
+        self._rescue_common(["--monitor", "--monitor-seconds", secs],
+                            f"监听串口 {secs} 秒")
 
 def _missing_optional(problems, what, feature, howto):
     """报告一个「源码可选、打包必需」的依赖缺失。

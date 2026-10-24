@@ -1,8 +1,10 @@
 """烽火 1 MiB factory 镜像生成（fiberhome-factory 的 Python 移植）。
 
 来源：fiberhome-factory（作者 22p，GPL-2.0-only）src/model.rs + src/import.rs。
-本文件因此按 GPL-2.0-only 分发（本仓库其余文件是 WTFPL）。
 https://github.com/22p/fiberhome-factory
+
+本文件按上游的 **GPL-2.0-only** 分发（本仓库其余文件是 AGPL-3.0-only，
+两者在同一个发行包里并列）。详见 README.MD「第三方代码」一节。
 用于在备份完烽火光猫后，从 mtd13 factory 分区里自动提取
 factory_conf / table / wlan EEPROM，拼出 OpenWrt 用的 1 MiB factory 布局。
 

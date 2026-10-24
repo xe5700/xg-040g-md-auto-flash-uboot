@@ -1,6 +1,16 @@
 # 邪恶的光猫刷机工具箱（xe-pon-flash-toolkit）
 
 贝尔 XG-040G-MD / XG-140G-MD 与烽火 HG5585F 电信版的一键刷机教程。
+刷坏了也不至于扔：接一条 USB-TTL 线，用界面第三个 tab 把 U-Boot 通过
+XMODEM 送进内存就能救回来（见「TTL / XMODEM 救砖」）。
+
+> **本项目完全免费、代码全部开源**：<https://github.com/xe5700/xg-040g-md-auto-flash-uboot>
+>
+> ⭐ 如果这个工具帮到你了，**进仓库点个 Star** 就是对作者最大的支持。
+>
+> ⚠️ 闲鱼上「倒卖」这个工具的都是二道贩子：工具本身免费、代码全部开源，
+> 在项目主页就能直接下载，不用花冤枉钱。遇到问题也请以项目主页的说明为准，
+> 二手卖家给的版本没人维护、也更新不了。
 
 ## 图形界面（推荐新手用）
 
@@ -10,8 +20,7 @@
 python3 gui.py
 ```
 
-界面按机型分成**两个 tab**，底部是共用的「保存配置 / 重新载入 / 恢复默认」
-和运行日志。
+界面按机型分成 tab，底部是共用的「保存配置 / 重新载入 / 恢复默认」和运行日志。
 
 第一个 tab（贝尔）：
 
@@ -21,11 +30,17 @@ python3 gui.py
 
 ![烽火 tab](应用截图-烽火.png)
 
+第三个 tab（**TTL / XMODEM 救砖**）—— 不碰 telnet、不需要超级密码、也不需要
+网络，一条 USB-TTL 线直接把 U-Boot 送进内存：
+
+![TTL / XMODEM 救砖 tab](应用截图-救砖.png)
+
 为什么不放一张表单里：贝尔和烽火的流程差别太大 —— 贝尔要开 FTP 才能 `su`、
 刷的是 `tcboot.bin`；烽火不用 FTP、备份和刷 U-Boot 都走 stock2ubi 的网页。
-塞在一起会有一半控件是灰的，用户很难判断「我现在到底该点哪个」。所以两个
+塞在一起会有一半控件是灰的，用户很难判断「我现在到底该点哪个」。所以每个
 tab 各有各的表单、提示和按钮，互不影响，配置也分开存（贝尔在
-`[device]/[telnet]/[super]`，烽火在 `[fh]`）。
+`[device]/[telnet]/[super]`，烽火在 `[fh]`，救砖在 `[rescue]`）。救砖 tab 是
+**唯一一个独立于机型的 tab** —— 砖了的时候机器已经不在系统里了，没有机型可言。
 
 ### 贝尔 tab（XG-040G-MD / XG-140G-MD 移动版）
 
@@ -76,8 +91,26 @@ telnet 密码（`FH-nE7jA%5m`）和提权密码（`Fh@`+MAC后6位）都由程�
 
    贝尔 tab 的操作区也放了同样两个链接（贝尔两种都能用）。
 
+   > ⚠️ **华邦（Winbond）颗粒的机器：先刷「修改版」临时引导，进系统后再换刷
+   > 官方版。** HG5585F / HG5382A 有的批次用的是 Winbond **W29N02KVSIAF**：
+   > 原厂固件按 **8 bit/512B** 写 NAND，而官方 BL2 从 uboot-an758x
+   > `v2026.07-3` 起改成按 **4 bit/512B** 读，直接刷官方 U-Boot 会卡在
+   > `ERROR: Stored BL31 + U-Boot FIP failed (-2)` 的循环里（只能 TTL 救砖）。
+   > 所以发行包里另外带了一份适配版：
+   >
+   > - `uboot-bin/修改版/` —— 8bit 读 / 4bit 写的临时引导（文件名带
+   >   `-tmp-8bit-read-4bit-write`），**第 ① 步和第 ④ 步先刷它**，机器能起来；
+   > - `uboot-bin/官方版/` —— 官方版，**进系统后立刻换刷它**，机器就回到
+   >   标准状态（第 ② 步「重建 UBI」会把引导按新格式写回去）。
+   >
+   > 两个目录都在程序目录里，随 zip 一起发；没走 zip 的去
+   > [xe5700 / uboot-an758x-winbond](https://github.com/xe5700/uboot-an758x-winbond/releases) 下。
+   > 真的已经砖了就走下面的「TTL / XMODEM 救砖」——**救砖用官方版**。
+   > 判断自己这台是不是华邦颗粒：串口开机日志会打印
+   > `Parallel NAND: W29N02KVSIAF`，或者 `python3 nandcheck.py <preloader.bin>`。
+
 4. **刷机步骤**——界面上按顺序列出 stock2ubi 网页里要做的 6 步，
-   并标出两条必砖红线：
+   并标出顺序上最容易出事的一条：
 
    | 顺序 | 网页里的按钮 | 要上传/操作的文件 |
    |---|---|---|
@@ -88,12 +121,15 @@ telnet 密码（`FH-nE7jA%5m`）和提权密码（`Fh@`+MAC后6位）都由程�
    | ⑤ | 刷写系统 | QWRT / PONWRT 的 `sysupgrade.bin` 或 `.itb` |
    | ⑥ | 启动系统 | 首次约 1~3 分钟，别断电 |
 
-   > ⚠️ **两条必砖红线**
-   > 1. 没刷入 `preloader.bin` 就点「重建 UBI」→ 必砖；
-   > 2. 没刷入 `bl31-u-boot.fip` 就点「启动系统」→ 必砖。
+   > ⚠️ **重建 UBI 之后必须刷入 U-Boot**
    >
-   > 重建 UBI 只清 UBI 里的数据，不动 preloader 和 U-Boot；但这两块
-   > boot 区一旦缺失，重建后再也起不来，只能拆机接串口用 XMODEM 救砖。
+   > UBI 一重建，装在它 fip 卷里的 `bl31-u-boot.fip` 就没了 —— 不补刷第 ④
+   > 步，第 ⑥ 步「启动系统」只会一直循环报
+   > `Stored BL31 + U-Boot FIP failed`。
+   >
+   > **单独重建 UBI 本身不会把机器弄死**：preloader 在 NAND 偏移 `0x800`
+   > 的主引导区，UBI 在另一块区域，两边互不影响。补上 U-Boot 就能起来，
+   > 实在不行接一根 TTL 线用 XMODEM 把 fip 送进内存也能救回来。
 
    > ⚠️ **第 1 步用 `preloader.bin`，不要用 `firstblock.bin`**
    >
@@ -159,11 +195,18 @@ mac =
 super_username = telecomadmin
 super_password = nE7jA%5m
 
-# TTL 串口（拆机接线时用；不走就保持 enabled = false）
+# 串口（TTL / XMODEM 救砖 tab 用；在界面里选完会自动写回这里）
 [serial]
-enabled = false
-port =
+enabled = false          # 旧「走 TTL 串口」的开关，已作废，保持 false 就行
+port =                   # 例：/dev/ttyUSB0（Windows 是 COM3）
 baudrate = 115200
+
+# TTL / XMODEM 救砖 tab（fip 留空 = 运行时按机型自动找官方版）
+[rescue]
+fip =
+wait = 30                # 等 "Press x" 提示的秒数
+after = 20               # 传完继续监听多少秒看起没起来
+monitor_seconds = 15     # 「只看日志」盯多久
 
 # 安全开关
 [safety]
@@ -245,12 +288,12 @@ reset 键 20 秒以上，让超级管理员密码回到默认值（贝尔是
 ```bash
 pip install telnetlib3            # 所有机型都需要（telnet 登录）
 pip install fh_tool-cli==0.2.7    # 只有烽火机型需要（fh_tool 加密 RPC）
-pip install pyserial              # 只有走 TTL 串口时需要
+pip install pyserial              # 只有用「TTL / XMODEM 救砖」tab 时需要
 ```
 
 三个都是**按需加载**的：贝尔机型没装 `fh_tool-cli` 也能正常跑，
-不走 TTL 没装 `pyserial` 也不影响（只有勾了「走 TTL 串口」才会报错并
-提示安装）。打包好的 exe 里三个都已内置。
+不接串口没装 `pyserial` 也不影响（只有点救砖 tab 上的按钮才会报错并提示
+安装）。打包好的 exe 里三个都已内置。
 
 ### 系统软件包
 **不再需要 netcat**。备份/上传改用临时 HTTP 服务器 + 设备侧 `curl`（见下文
@@ -261,8 +304,9 @@ pip install pyserial              # 只有走 TTL 串口时需要
 1. **重置路由器**
    - 按住 reset 键 20 秒以上，将设备恢复至出厂设置
 
-   > 如果你打算走 **TTL 串口**（见下文「TTL 串口接入」），第 1 步和下面
-   > 第 2、3 步都可以跳过 —— 串口本身就是 root shell。
+   > **已经刷坏了、进不去系统的话**：不用走下面这套流程，直接看
+   > 「TTL / XMODEM 救砖」一节 —— 一条 USB-TTL 线就能把 U-Boot 送进去。
+   > 机器完全正常、只是想少开两个服务的话，本工具的 telnet 流程仍然是最快的。
 
 2. ~~**登录系统**~~ —— **已自动化，脚本会自动完成**
    - 脚本用超级管理员账号 `CMCCAdmin` / `aDm8H%MdA` 自动登录网页，
@@ -297,6 +341,7 @@ pip install pyserial              # 只有走 TTL 串口时需要
 | `--mode flash` | 开启 Telnet+FTP + 备份 + 刷写 U-Boot | **是，危险** |
 | `--mode stock2ubi` | 上传 an758x-stock2ubi + 自动备份校验 + 打开网页 | 否（刷写在它网页里做） |
 | `--mode report` | 导出诊断包 zip（密码相关文件 + 密文 + 本地密钥表） | 否（只读下载） |
+| `--mode ttl` | TTL / XMODEM 救砖：把 `bl31+u-boot.fip` 送进设备内存 | 否（只写内存，不碰 flash） |
 
 用 `--model` 选机型（默认 `bel`）：
 
@@ -311,6 +356,9 @@ python3 flash.py --model hg5585f  --mode backup   # 烽火 HG5585F CT
   `④ 运行 stock2ubi 刷 U-Boot`、`重启光猫`，外加默认锁定的「刷写 U-Boot」；
 - **烽火 tab**：`① 开启 Telnet`、`② 备份并刷 U-Boot（stock2ubi）`、`重启光猫`、
   `导出诊断包`。
+- **TTL / XMODEM 救砖 tab**：`刷入 U-Boot（bl31 + u-boot.fip）`、
+  `只看日志（检查线接对没有）`，另外两个灰着的按钮（`刷入 preloader` /
+  `刷入 firstblock`）还没实现，见「TTL / XMODEM 救砖」一节。
 
 **Telnet 和 FTP 是两个独立开关**，各自单独检测端口：
 - 两个都关 → `--mode backup` 会依次自动开启；
@@ -324,6 +372,7 @@ python3 flash.py --mode backup     # 只备份全部分区
 python3 flash.py --mode flash      # 刷机（会要求输入 YES 二次确认）
 python3 flash.py --mode stock2ubi  # 上传 an758x-stock2ubi 并在光猫后台跑起来
 python3 flash.py --mode report     # 导出诊断包（telnet 密码解不开时发给作者）
+python3 flash.py --mode ttl --serial-port /dev/ttyUSB0 --file 官方版/an7581-fiberhome-hg5585f-ct-bl31-u-boot.fip
 python3 flash.py --reboot          # 只重启光猫（清掉网页会话 / telnet 锁定）
 ```
 
@@ -506,66 +555,103 @@ HG5585F CT 用的是 **SPI NAND**，不是 eMMC、也不是 NOR。真机上
   共用；但烽火真机上的备份流程还没有完整跑过一遍，请先确认 `--mode backup`
   的产物大小与 `device.json` 里的记录一致再考虑后续操作。
 - **FTP 不开**：烽火提权不需要 `user_ftp`，所以工具不会去开 21 端口。
+- **华邦（Winbond）颗粒的机器要「先临时、后官方」刷两遍**：见上面
+  「U-Boot 固件下载」那段红框。直接用官方引导会卡在
+  `Stored BL31 + U-Boot FIP failed (-2)` 循环里，只能走 TTL 救砖。
 
-## TTL 串口接入（拆机接线，绕过一切网页限制）
+## TTL / XMODEM 救砖（第三个 tab）
 
-免拆机那条路（网页开 Telnet + `su user_ftp`）依赖超级密码和 telnet 密码；
-一旦密码被改过、网页会话抢不到、或者 telnet 被锁，就走不通了。TTL 串口是
-**物理旁路**：接上串口线就是设备的 root shell，不需要超级密码、不需要
-Telnet、不需要 FTP，也不需要知道任何密码。
+> **这一节讲的是新功能。** 早期版本里那个「走 TTL 串口」勾选框（把串口当成
+> telnet 的替代通道去备份/刷机）**已经作废、并从界面上撤掉了**，原因见本节
+> 最后一小节。现在 TTL 只有一个入口：救砖。
+
+设备刷坏之后（典型是卡在 `ERROR: Stored BL31 + U-Boot FIP failed (-2)`，然后
+一直循环打印 `Press x to load BL31 + U-Boot FIP via XMODEM`），网页和 telnet
+都已经没有了，唯一还能说话的通道就是串口。这个 tab 就干一件事：**把
+`bl31-u-boot.fip` 通过 XMODEM 直接送进设备内存跑起来**，进了 U-Boot 再回网页
+重建系统。
+
+这条路的性质：**只往内存里送数据、不写 flash**，所以它不会让砖变得更严重。
 
 ### 接线
 
-- 需要一根 **USB-TTL 串口线**（CH340 / CP2102 / FT232 都行，3.3V）
-- 光猫主板上找 4 个焊盘/排针，一般是 `VCC GND TX RX`（有的板子丝印是
-  `3V3 GND TXD RXD`）
-- **TX 接 RX、RX 接 TX**，GND 必须共地
-- **VCC 不要接**（光猫自己供电，接了可能倒灌）
-- 串口参数：**115200 8N1**，无流控
+- 一根 **USB-TTL 串口线**（CH340 / CP2102 / FT232 都行，3.3V）
+- 主板上的 4 个焊盘，一般丝印是 `VCC GND TX RX`（有的板子是 `3V3 GND TXD RXD`）
+- **TX 接 RX、RX 接 TX**，GND 必须共地，**VCC 不要接**（光猫自己供电）
+- 串口参数：**115200 8N1**，无流控（AN7581 只认这个，改了收不到）
 
 ### 用法
 
-界面：勾选「走 TTL 串口」→ 点「刷新」→ 在下拉框里选端口（**程序不会自动
-猜端口**，插了多个串口设备时猜错就会往别人的设备里敲字符）→ 选波特率 →
-照常用「③ 备份全部分区」。
+界面：
 
-命令行：
+1. 「TTL / XMODEM 救砖」tab → ① 点「刷新」选串口；列不出来就直接手打
+   （Linux 是 `/dev/ttyUSB0`，Windows 是 `COM3`）
+2. ② 选要送进去的 FIP：点「自动查找」会**按当前机型**在程序目录里挑一个
+   **官方版** `*bl31-u-boot.fip`（`uboot-bin/官方版/`，随 zip 一起发），
+   也可以用「浏览…」自己选
+3. ③ 点「刷入 U-Boot」→ 确认 → 等日志走完（340 KB 大约 35 秒）
+4. 传完设备**就已经在 U-Boot 里了**（不用再重启）：按住 reset 进 Web 恢复
+   模式，或者在串口里按 `Ctrl-C` 打断后敲 `httpd dhcp`，再开
+   `http://192.168.0.1/`
+5. 在网页里**重建 UBI 并重刷系统**
+6. **验收标准：拔掉 TTL 线，断电重启三次，次次都能自己起来。**
+   只做到第 4 步的话，下次重启还会回到同一个错误（UBI 还是老格式写的）。
+
+命令行等价写法：
 
 ```bash
-python3 flash.py --mode backup --serial-port /dev/ttyUSB0
-python3 flash.py --mode backup --serial-port COM3          # Windows
-python3 flash.py --mode backup --serial-port /dev/ttyUSB0 --serial-baud 57600
-python3 flash.py --mode flash  --serial-port /dev/ttyUSB0  # 刷 U-Boot 同理
+python3 flash.py --mode ttl --serial-port /dev/ttyUSB0 \
+    --file uboot-bin/官方版/an7581-fiberhome-hg5585f-ct-bl31-u-boot.fip
+
+python3 ttl_rescue.py --list                  # 先看有哪些串口
+python3 ttl_rescue.py --port /dev/ttyUSB0 --monitor   # 只看日志，判断线接对没有
 ```
 
-先看有哪些串口：
+命令行下 `--file` 和 `--serial-port` 都会转发给 `ttl_rescue.py`，也可以直接
+用它自己的参数（`--wait`、`--after`、`--retry`、`--no-force-x` …）。
 
-```bash
-python3 serial_shell.py
-```
+### 华邦颗粒的机型：这里要用官方版引导
 
-### 为什么 TTL 不需要改备份/刷写逻辑
+会砖到需要救砖，多半就是**给华邦（Winbond）颗粒的机器刷了官方 U-Boot**：
+原厂固件按 **8 bit/512B** 写 NAND，而官方 BL2 从 v2026.07-3 起按 **4 bit/512B**
+读，读不出原厂写进去的 fip 卷，于是串口一直循环。而 XMODEM 是把 FIP **直接送
+进内存、根本不经过 NAND 读取**，官方版在这一步一定跑得起来。
 
-`serial_shell.py` 把 pyserial 包装成**和 `telnetlib3.Telnet` 一样的接口**
-（`write` / `expect` / `read_until` / `read_very_eager` / `close`）。
-`flash.py` 的备份、刷写、回读校验全部只通过这几个方法跟设备对话，所以串口
-对象直接当 `tn` 用，整套逻辑原样复用 —— 不需要为 TTL 再写一份实现。
+所以：**救砖这条路上用官方版引导，别用修改版。** 修改版是给「进系统后把闪存
+按新格式重写」那条流程用的，在「烽火 HG5585F 电信版」tab 里。界面上也做了
+三重拦截：自动查找不列修改版、文件名带 `-tmp-8bit-read-4bit-write` 或躺在
+`uboot-bin/修改版/` 里的一律跳过、你手动选到它时提示行会变红。
 
-走 TTL 时会自动跳过「开 Telnet」「开 FTP」两个联网步骤（串口本身就是 root，
-开那两个没有意义），界面上的这两个按钮也会灰掉。
+### 线接错了会告诉你哪里不对
 
-### TTL 也能救砖
+串口接反、波特率不对、端口选错的时候收到的都是乱码。工具会统计收到的字节里
+**可打印 ASCII 的占比**，低于阈值就判定为乱码，并打印一份排查清单：当前串口
+（含 `/dev/serial/by-id/` 里读出来的 CH340 型号）、波特率、接收字节数、原始
+字节快照（hexdump），以及按顺序排查的四条建议（TX↔RX 是否交叉、GND 是否共地、
+波特率是不是 115200、串口是不是选错了）。日志会同时写进
+`_out/ttl_rescue_时间戳.log`，窗口关掉现场也还在。
 
-如果设备已经刷坏、起不来，串口会停在 U-Boot（`U-Boot>` 或
-`Hit any key to stop autoboot`）。工具会识别出这个状态并告诉你当前停在
-引导器里，但**恢复操作需要你自己在串口终端里做** —— 那是 U-Boot 命令，
-不在本工具职责范围内。
+### 两个还没做的按钮
 
-### 已知限制
+「刷入 preloader」和「刷入 firstblock」是灰的。它们对应「从 TTL 直接写
+preloader / firstblock」，需要**先短接闪存引脚让 SoC 停在 BootROM** 才有效，
+本工具还没实现。而且绝大多数情况下并不需要它们：单独刷 preloader 一般不会
+把机器刷坏，只是紧接着那次 bl31/u-boot 的写入会失败 —— 换句话说机器里通常
+已经有 preloader 了，这种情况不用短接、也不用进 preloader 模式，直接用上面
+的「刷入 U-Boot」把 `bl31 + u-boot.fip` 送进去就行。
 
-- **没有真机验证**：串口驱动本身用 pty 假设备做了完整测试（登录、读分区表、
-  备份、清单），但还没有在真实光猫上跑过。
-- **pyserial 是可选依赖**：没装时 TTL 功能不可用，telnet 路线不受影响。
+### 关于旧的「走 TTL 串口」（已作废）
+
+早期版本在贝尔 tab 上有一个「走 TTL 串口」勾选框：`serial_shell.py` 把
+pyserial 包装成**和 `telnetlib3.Telnet` 一样的接口**（`write` / `expect` /
+`read_until` / `read_very_eager` / `close`），让串口对象直接当 `tn` 用，于是
+整套备份/刷写/回读校验逻辑原样复用，还能跳过「开 Telnet」「开 FTP」两步。
+
+**这个功能已经不在界面上了**（`serial_shell.py` 本身还留着），原因是它解决的
+不是真问题：能拆机接线的人，随便一个串口终端就是 root shell，用工具再跑一遍
+telnet 流程没有额外价值；而真正需要 TTL 的场合是**救砖** —— 那时候机器停在
+BootROM / U-Boot，根本进不了系统，老功能一个字节都帮不上。所以 TTL 的入口
+收敛成了现在这个专门的救砖 tab。
 
 ## 配置和刷入
 
@@ -948,9 +1034,35 @@ su user_ftp                     → Password: 输入 j3ba73@8
 - 移植范围：`src/model.rs` 的 1 MiB 布局与身份字段处理、`src/import.rs` 的
   UBI/UBIFS 与 JFFS2 解析、PON 校准格式转换、Wi-Fi MAC 派生
 
-**因此 `fhfactory.py` 这一个文件按 GPL-2.0-only 分发**，不是 WTFPL。
+**因此 `fhfactory.py` 这一个文件按 GPL-2.0-only 分发**，不是 AGPL-3.0。
 如果只使用贝尔机型（不触发烽火备份），程序不会 import 它。
-其余文件仍按本仓库 LICENSE（WTFPL）分发。
+其余文件按本仓库 LICENSE（AGPL-3.0-only）分发。
+
+> 直白说：这两个许可是**并列**的 —— 碰到 `fhfactory.py` 就按 GPL-2.0-only 的
+> 规矩来（改过它再分发时，按 GPLv2 提供对应源码），仓库里其他部分按
+> AGPL-3.0。发布二进制发行包时，把这段说明一起保留即可。
+
+## 许可 / License
+
+本项目以 **GNU Affero 通用公共许可证第 3 版（AGPL-3.0-only）** 分发，
+全文见 [LICENSE](LICENSE)。
+
+    Copyright (C) 2025-9999 xe5700 <xe5700@outlook.com>
+
+老版本用的是 WTFPL v2。那个协议对「改一改就闭源拿去卖」没有任何约束，
+而本工具早就不是个简单的刷机脚本了：它内置了 preloader / U-Boot 的机型
+匹配与 NAND ECC 兼容性判断（`nandcheck.py`）、会把整机固件写进光猫、
+还带着上游的移植代码 —— 这些东西出错是要把别人的机器刷成砖的。
+所以换成 AGPL-3.0：你照样可以随便用、随便改、随便分发，但只要改了再
+发布，就必须把改后的源码一起放出来；把它做成联网服务给别人用，也要
+按第 13 条提供源码。
+
+### 你可能想知道的两件事
+
+- **我自己刷机、自己改着玩，要开源吗？** 不用。AGPL 只管「分发」和
+  「通过网络提供服务」这两件事，自己在家用没有任何义务。
+- **我想把这个工具打包进自己的教程 / 镜像里发出去？** 可以，保留
+  `LICENSE` 和版权声明，并把源码（包含你的改动）放在同一处提供即可。
 
 ## 开发者：自己编译 exe / 发版
 

@@ -78,3 +78,10 @@ _recover/
 fh_report_*.zip
 _report_tmp/
 HANDOFF.md
+# 闪存/preloader 调查用的参考源码与解包产物（体积大、可重新拉取）
+_src/
+# nandcheck.py --fix 输出的补好的 preloader
+_out/
+# 用户自己下到本地的固件（preloader / firstblock / bl31-u-boot.fip），
+# 含华邦专用的临时版本 —— 体积大、有版权，不进版本库
+uboot-bin/
