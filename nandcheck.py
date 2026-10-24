@@ -276,7 +276,12 @@ def winbond_ecc_verdict(info):
         "扫不到 UBI 里的 fip 卷，重启后卡在：\n"
         "    ERROR: Stored BL31 + U-Boot FIP failed (-2) "
         "Press x to load ... via XMODEM\n"
-        "也就是说：**Winbond 机型刷了必砖**，只能 TTL + XMODEM 救。"), entry
+        "也就是说：Winbond 机型用这一份刷了会砖。\n"
+        "解法：改用 uboot-bin/修改版/ 里那一套（8bit 读 / 4bit 写）的\n"
+        "    preloader / firstblock / bl31-u-boot.fip\n"
+        "—— 它们是原厂内核写下的那份数据的正确解码方式。\n"
+        "已经刷成砖了：接 TTL，看到 Press x ... via XMODEM 时按 x，"
+        "发送「官方版」的 bl31-u-boot.fip 进内存即可进恢复模式。"), entry
 
 
 def report_preloader(path):

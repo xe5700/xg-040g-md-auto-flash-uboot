@@ -3628,8 +3628,8 @@ def run_flow(args, confirm_flash=None):
 
         # 4a-0. 闪存颗粒 / ECC 兼容性检查（只读，不碰设备数据）
         # 这一模式后面要在网页里上传 preloader.bin，而 preloader 的 ECC
-        # 设置跟设备颗粒不匹配就是必砖。这里先查清楚，把结论直接告诉用户，
-        # 免得用户拿 v2026.07-3/-4 的 preloader 去刷 Winbond 机型。
+        # 设置跟设备颗粒不匹配就会砖（华邦机型刷官方版就是这种情况）。
+        # 这里先查清楚、把结论和该换哪套文件直接告诉用户，别让人白刷一遍。
         chip, _ok, _msg = check_nand_ecc_compat(
             tn, preloader_path=(args.get("preloader") or None))
         if chip:
@@ -3649,25 +3649,27 @@ def run_flow(args, confirm_flash=None):
                         args["preloader"], out)
                     print(f"  [{'✓' if fok else '✗'}] {fmsg}")
                     if fok:
-                        print("[!] 请在上传 preloader 那一步选择这个文件：")
-                        print(f"    {out}")
-                        print("[!] ⚠️ 这只是 BL2 一层。U-Boot 仍是 4bit，"
-                              "单用可能会在「第一次重启」时再砖。")
-                        print("[!] 真要一次刷通，需要把 FIP 那一层也统一到"
-                              "8bit（见 NAND-ECC-问题报告.md 第六节路线 B）。")
+                        print("[!] 但这个补丁不是推荐解法，只是给你留的后路：")
+                        print(f"    补出来的文件在 {out}")
+                        print("[!] 它只把 BL2 的读改回 8bit，而 U-Boot 仍是"
+                              "4bit 写，两边又对不上，")
+                        print("    很可能在「第一次重启」时才砖。正解是改用"
+                              "uboot-bin/修改版/ 那一整套。")
                         tn.close()
                         sys.exit(1)
-                print("[!] 本机型请改走 XMODEM 路径，不要用 stock2ubi 一键刷：")
-                print("    1) 本工具的备份照常做（纯读取，不受影响）")
-                print("    2) 照常刷 preloader / firstblock / FIP，刷完进不去"
-                      "系统是预期现象")
-                print("    3) 接 TTL，看到 Press x to load ... via XMODEM 时"
-                      "按 x，发送 bl31-u-boot.fip")
-                print("    4) U-Boot 起来后正常走网页恢复刷 OpenWrt")
-                print("[!] 原因是厂商内核按 8bit 写、新 BL2 按 4bit 读，两边"
-                      "错位；XMODEM 路径里写读都是 BL2 自己，所以自洽。")
-                print("[!] --preloader-fix 只补 BL2 这一层，单用它会变成"
-                      "「刷完第一次重启才砖」，别当解法。")
+                print("[!] 解法：改用 uboot-bin/修改版/ 里那一套（8bit 读 / 4bit 写）")
+                print("    preloader / firstblock / bl31-u-boot.fip")
+                print("    —— 原厂内核写下的数据是按 8bit 编码的，修改版把读改回 8bit")
+                print("    就跟它自洽了，刷完能正常进系统。")
+                print("[!] 进系统后建议立刻换刷 uboot-bin/官方版/ 的对应文件，")
+                print("    让机器回到标准的官方引导状态。")
+                print("[!] 如果已经刷成砖了：接 TTL，看到 Press x to load ... via")
+                print("    XMODEM 时按 x，发送「官方版」的 bl31-u-boot.fip 进内存即可")
+                print("    进 U-Boot 网页恢复模式（救砖一律用官方版，别用修改版）。")
+                print("[!] 原因是厂商内核按 8bit 写、官方 BL2 自 v2026.07-3 起按")
+                print("    4bit 读，两边错位；修改版把读改回 8bit 就自洽了。")
+                print("[!] --preloader-fix 只补 BL2 这一层，而 U-Boot 仍是 4bit 写，")
+                print("    两边又对不上，别当解法 —— 要用成套的那三个文件。")
                 print("[!] 未向设备写入任何数据，设备状态未改变。")
                 tn.close()
                 sys.exit(1)
