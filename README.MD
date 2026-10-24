@@ -1015,6 +1015,43 @@ su user_ftp                     → Password: 输入 j3ba73@8
 
 ## 致谢 / Acknowledgements
 
+这个工具能跑起来，靠的主要是别人把最难的活儿先干完了。尤其要谢 **pbs05**：
+他的 U-Boot 与 stock2ubi 是整个刷机流程的地基 —— 少了它们，本工具能做的
+就只有开 Telnet 和备份。
+
+### U-Boot / 引导 / 刷机工具
+
+| 项目 | 作者 | 本工具跟它的关系 |
+|---|---|---|
+| [uboot-an758x](https://github.com/pbs05/uboot-an758x) | pbs05 | **官方版引导**：`preloader.bin`（BL2）、`firstblock.bin`、`bl31-u-boot.fip`（BL31+U-Boot），Airoha AN7581 / AN7583 通用，自带 U-Boot 网页恢复模式。刷机的 6 步顺序、firstblock 与 preloader 的区别，全部来自它的说明 |
+| [uboot-an758x-winbond](https://github.com/xe5700/uboot-an758x-winbond) | xe5700 | 上面那个的 fork：针对华邦颗粒（`W29N02KVSIAF`）改成「8 bit 读、4 bit 写」的临时引导，专门用来进华邦机器的系统。发行包里的 `uboot-bin/修改版/` 就是它 |
+| [an758x-stock2ubi](https://github.com/pbs05/an758x-stock2ubi) | pbs05 | 免拆刷机的核心：在原厂系统上跑起一个网页，分区备份 / 刷 BL2 / 重建 UBI / 刷 U-Boot 都在它的网页里完成 |
+| [ImmortalWrt-Airoha](https://github.com/Loong1996/ImmortalWrt-Airoha) | Loong1996 | Airoha 平台的 ImmortalWrt 固件与 web U-Boot（带网页恢复模式）。发行包里的 `uboot-bin/loong1996/` 是按机型从它的 release 取的 |
+| [atf-airoha](https://github.com/Ansuel/atf-airoha) | Ansuel | ARM Trusted Firmware 的 Airoha 移植 —— BL2 怎么识别闪存、用几位 ECC，全在这份代码里 |
+| [make_airoha_atf](https://github.com/xinyooo/make_airoha_atf) | xinyooo | 自己编译上面那份 ATF 用的工具与环境 |
+
+### 排查与救砖（华邦 ECC 那一课）
+
+- **lyq1996** —— 在 [uboot-an758x issue #21](https://github.com/pbs05/uboot-an758x/issues/21)
+  里把华邦机型变砖的根因写清楚了：原厂（tcboot/BL2 与内核）整片按 **8 bit BCH**
+  读写，而官方 BL2 自 `v2026.07-3` 起按 Winbond ONFI 标称的 **4 bit** 读写，
+  两种解码器错位就会静默损坏数据。本工具的 `nandcheck.py`、以及「修改版引导」
+  这条路，思路直接来自这份分析。
+- **mylucien** —— 在 [issue #22](https://github.com/pbs05/uboot-an758x/issues/22)
+  里给出「TTL 提示 `Press x` 时用 XMODEM 把 `bl31-u-boot.fip` 送进内存」的
+  救砖办法并实测成功。本工具救砖 tab 就是把这条路做成了点一下。
+- **erroljay-stack** —— 同样是 issue #21，提醒「刷完能进系统」不等于修好：
+  重启后照样报 `Stored BL31 + U-Boot FIP failed (-2)`。本工具把「拔掉 TTL 线、
+  断电重启三次都能自起」写成验收标准，就是因为这条提醒。
+- **pbs05** —— 在两个 issue 里逐个回复疑问：「烽火机型变体较多，有的版本用不了
+  这个工具」「BL2 上传 preloader 还是 firstblock 本质上是一样的」「XMODEM 传完
+  立刻按住 reset 进 WebUI 恢复模式」。
+- **恩山无线论坛**（right.com.cn）关于 HG5585F 的两个帖子（tid 8483906、8491746）
+  提供了实操经验，包括「刷完先别用 2.5G 口，那个口在新 U-Boot 里没有驱动」
+  这类只看代码看不出来的细节。
+
+### 工具
+
 本项目使用了 **billion-context** —— 一个面向小上下文窗口的上下文压缩插件，
 兼顾省 token 与超长会话；其内核为 **acp-kernel**。
 
