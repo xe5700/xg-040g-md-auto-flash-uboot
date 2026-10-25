@@ -293,6 +293,13 @@ STOCK2UBI_IGNORE_KERNEL = False       # True 则加 --ignore-kernel-version 跳�
 STOCK2UBI_PROJECT_URL = "https://github.com/pbs05/an758x-stock2ubi"
 STOCK2UBI_UBOOT_URL = "https://github.com/pbs05/uboot-an758x"
 
+# 新 U-Boot 里没有 2.5G 网口的 PHY 驱动：插着 2.5G 口去开恢复页会拿不到 IP、
+# 打不开网页（恩山 tid-8491746 的实操结论，用户也反馈过）。凡是要用户
+# 「访问 192.168.0.1」的地方都要带上这一条，否则他会以为是刷坏了。
+UBOOT_LAN_PORT_HINT = ("⚠️ 别接 2.5G 口：新 U-Boot 里没有 2.5G 网口的驱动，"
+                       "插它拿不到 IP、也打不开恢复网页 —— "
+                       "请用千兆（1G）LAN 口接电脑。")
+
 # --- NAND 闪存 / ECC 兼容性检查（见 nandcheck.py 顶部的长注释）---
 # 背景：HG5585F / HG5382A 用并行 NAND，同型号不同批次焊不同颗粒。
 # Winbond W29N02KVSIAF 和 Toshiba TC58NVG1S3HTAI0 几何参数完全一样，
@@ -3427,6 +3434,7 @@ def run_stock2ubi(tn, local_ip, filepath, ignore_kernel=False,
     print(f"    ⑥ 启动系统      —— 首次约 1~3 分钟，别断电")
     print(f"       ⚠️ 第 ④ 步没成功就点启动 = 起不来（可接 TTL 用 XMODEM 救）")
     print(f"    重启后访问 http://192.168.0.1/ 继续安装（首次进入恢复页可能要约一分钟）。")
+    print(f"    {UBOOT_LAN_PORT_HINT}")
     print(f"    项目地址: {STOCK2UBI_PROJECT_URL}")
     print(f"    U-Boot 项目地址: {STOCK2UBI_UBOOT_URL}")
 
@@ -3666,6 +3674,7 @@ def run_flow(args, confirm_flash=None):
                 print("[!] 如果已经刷成砖了：接 TTL，看到 Press x to load ... via")
                 print("    XMODEM 时按 x，发送「官方版」的 bl31-u-boot.fip 进内存即可")
                 print("    进 U-Boot 网页恢复模式（救砖一律用官方版，别用修改版）。")
+                print(f"    {UBOOT_LAN_PORT_HINT}")
                 print("[!] 原因是厂商内核按 8bit 写、官方 BL2 自 v2026.07-3 起按")
                 print("    4bit 读，两边错位；修改版把读改回 8bit 就自洽了。")
                 print("[!] --preloader-fix 只补 BL2 这一层，而 U-Boot 仍是 4bit 写，")
@@ -3732,6 +3741,7 @@ def run_flow(args, confirm_flash=None):
         print(f"         ⚠️ 第 ④ 步没成功就点启动 = 起不来（可接 TTL 用 XMODEM 救）")
         print(f"    重启后访问 http://192.168.0.1/ 继续安装"
               f"（首次进入恢复页可能要约一分钟）。")
+        print(f"    {UBOOT_LAN_PORT_HINT}")
         print(f"    项目地址: {STOCK2UBI_PROJECT_URL}")
         print(f"    U-Boot 项目地址: {STOCK2UBI_UBOOT_URL}")
         tn.close()

@@ -415,9 +415,14 @@ python3 flash.py --reboot          # 只重启光猫（清掉网页会话 / teln
   偏移 0x0 整块写入、会覆盖开头 0x800，实测成砖率高），以及 AN758x U-Boot 的
   `bl31-u-boot.fip`；
 - 重启后访问 `http://192.168.0.1/` 继续安装；首次进入恢复页可能要约一分钟。
+- ⚠️ **别接 2.5G 口**：新 U-Boot 里没有 2.5G 网口的 PHY 驱动，插着它去访问
+  恢复页会拿不到 IP、也打不开网页 —— 请换一个千兆（1G）LAN 口接电脑。
 
 > ⚠️ 刷写过程中**绝对不能断电**，重启后**必须**访问 `192.168.0.1` 继续完成
 > 安装，否则光猫会变成砖头，只能用 XMODEM 模式救砖。
+>
+> ⚠️ 进 U-Boot 恢复页要插**千兆网口**：官方 U-Boot 里没有 2.5G 口的驱动，
+> 插 2.5G 口会一直拿不到 IP、网页也打不开（恩山 tid-8491746 的实测结论）。
 
 `an758x-stock2ubi` 本体（aarch64 静态 ELF）放在程序同目录即可，打包 exe 时
 会一并带上；也可以直接替换 exe 同目录的那份，不用重新打包。
@@ -593,6 +598,8 @@ HG5585F CT 用的是 **SPI NAND**，不是 eMMC、也不是 NOR。真机上
 4. 传完设备**就已经在 U-Boot 里了**（不用再重启）：按住 reset 进 Web 恢复
    模式，或者在串口里按 `Ctrl-C` 打断后敲 `httpd dhcp`，再开
    `http://192.168.0.1/`
+   （⚠️ 去开这个页面要插**千兆口**：U-Boot 里没有 2.5G 口的驱动，
+   插 2.5G 口会一直拿不到 IP、页面打不开）
 5. 在网页里**重建 UBI 并重刷系统**
 6. **验收标准：拔掉 TTL 线，断电重启三次，次次都能自己起来。**
    只做到第 4 步的话，下次重启还会回到同一个错误（UBI 还是老格式写的）。
@@ -672,7 +679,8 @@ BootROM / U-Boot，根本进不了系统，老功能一个字节都帮不上。�
        上传到光猫后台跑起来，再打开它的网页，在里面备份分区、上传
        `preloader.bin`（别用 `firstblock.bin`）和
        [uboot-an758x](https://github.com/pbs05/uboot-an758x) 的
-       `bl31-u-boot.fip`，重启后访问 `http://192.168.0.1/` 继续安装。
+       `bl31-u-boot.fip`，重启后访问 `http://192.168.0.1/` 继续安装
+       （**用千兆口**：U-Boot 里没有 2.5G 口的驱动，插 2.5G 口拿不到 IP）。
        详见上面的「`--mode stock2ubi`」一节。
      - 也可以直接刷现成的 web U-Boot 固件：
        [Loong1996 的 ImmortalWrt-Airoha（XG-040G-MD-ubi-auto）](https://github.com/Loong1996/ImmortalWrt-Airoha/releases#release-XG-040G-MD-ubi-auto-20260927-59)

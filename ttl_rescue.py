@@ -48,7 +48,9 @@ FIP 传完、U-Boot 跑起来，这一步就到位了 —— **而且不用重�
   * 就在当前串口按 Ctrl+C 打断，敲 `httpd dhcp` 进 WebUI；
     也可以按住 reset 进恢复模式，两条路等效（上游 pbs05 在 issue #21 里说的）。
   * 浏览器打开 http://192.168.0.1/，按页面流程重建 UBI 并重刷。
-    华邦闪存机型：这时把 U-Boot 换成官方的再收尾。
+    ⚠️ 别接 2.5G 口：U-Boot 里没有 2.5G 网口的驱动，插它拿不到 IP、
+    也打不开恢复网页 —— 请用千兆（1G）LAN 口接电脑。
+    （华邦闪存机型：重建 UBI 会把引导一并写回去，重刷完就回到标准状态。）
 
 **验收标准**：拔掉 TTL、直接断电重启三次，次次能自起才算真脱砖。做不到
 的话，说明 bootstrap 那一层还停在 8bit —— 上游 erroljay-stack 在 issue #21
@@ -1057,7 +1059,9 @@ def main(argv: list[str]) -> int:
         print("  * 就在这个串口按 Ctrl+C 打断，敲 `httpd dhcp` 进 WebUI；")
         print("    （或者按住 reset 进恢复模式，等效）")
         print("  * 浏览器打开 http://192.168.0.1/，按页面流程重建 UBI 并重刷；")
-        print("    华邦闪存机型：这时把 U-Boot 换成官方的再收尾。")
+        print("    ⚠️ 别接 2.5G 口：U-Boot 里没有 2.5G 网口的驱动，")
+        print("       插它拿不到 IP、也打不开恢复网页 —— 请用千兆（1G）LAN 口。")
+        print("    （华邦闪存机型：重建 UBI 会把引导一并写回去，重刷完即回到标准状态。）")
         print()
         print("  ⚠️ 验收标准：拔掉 TTL，直接断电重启三次，次次能自起才算真脱砖。")
         print("     做不到说明 bootstrap 那一层还是 8bit（见")
