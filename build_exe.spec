@@ -81,6 +81,16 @@ datas = [
     # fhreport.py 是「导出诊断包」用的：把设备上密码相关的文件和密文打包成 zip
     # 交给作者分析。同样是按钮回调里动态 import，静态分析看不到。
     ("fhreport.py", "."),
+    # ⚠️ ttl_rescue.py 是 TTL / XMODEM 救砖（第三个标签页）。gui.py 用
+    # spec_from_file_location **从磁盘**加载它，不是 import —— 所以它必须作为
+    # 数据文件打进来；只写进 hiddenimports 是没用的（模块会被编译进 exe 的
+    # PYZ 归档里，磁盘上没有这个 .py，find_resource 找不到）。
+    # 踩过：v2.4.0 的 exe 漏了这一行，用户点救砖报「找不到 ttl_rescue.py」。
+    ("ttl_rescue.py", "."),
+    # nandcheck.py 是 flash.py 里 `import nandcheck` 判断 preloader 的 ECC 与
+    # 设备颗粒是否匹配。漏了它不会崩（flash.py 有 try/except 兜底），但华邦
+    # 机型那道闸会**静默失效** —— 这比崩了更糟，所以这里必须带上。
+    ("nandcheck.py", "."),
 ]
 # tcboot.bin 是可选的：存在就一起打包，作为「找不到外部文件」时的兜底
 if os.path.isfile("tcboot.bin"):
@@ -150,6 +160,12 @@ FLASH_HIDDEN = [
     "models",
     "serial_shell",
     "fhtool",
+    # TTL / XMODEM 救砖：flash.py --mode ttl 里 import ttl_rescue；
+    # nandcheck 是 check_nand_ecc_compat 里 import 的。两个都是延迟导入，
+    # 静态分析看不到。（ttl_rescue.py / nandcheck.py 同时也进了上面的 datas：
+    # 救砖 tab 是直接从磁盘加载 ttl_rescue.py 的，光靠这里编译进去不够。）
+    "ttl_rescue",
+    "nandcheck",
 ]
 
 a = Analysis(

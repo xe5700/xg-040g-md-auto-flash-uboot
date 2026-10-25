@@ -2065,8 +2065,15 @@ class App:
         """
         try:
             mod = self._load_rescue()
-        except Exception as e:
-            messagebox.showerror(APP_TITLE, f"无法加载救砖模块 ttl_rescue.py：{e}")
+        except Exception as e:  # noqa: BLE001
+            messagebox.showerror(
+                APP_TITLE,
+                f"无法加载救砖模块 ttl_rescue.py：{e}\n\n"
+                "这是打包时漏带文件造成的（不是你的操作问题）。\n"
+                "应急办法：把源码里的 ttl_rescue.py 复制到程序（exe）所在目录，"
+                "重新打开本工具即可。\n"
+                "也请到项目主页反馈一下，好把这个包修掉：\n"
+                f"{PROJECT_URL}")
             return
         port = (self.serial_port.get() or "").strip()
         if not port:
@@ -2280,6 +2287,46 @@ def self_test():
         except Exception as e:
             problems.append(f"flash.py 加载失败: {type(e).__name__}: {e}")
             print(f"  [✗] flash.py — {type(e).__name__}: {e}")
+
+    # 4a. TTL / XMODEM 救砖模块。救砖 tab 用 spec_from_file_location 从**磁盘**
+    # 加载它（不是 import），所以它属于「数据文件」，必须写进 build_exe.spec 的
+    # datas；只写 hiddenimports 是不够的（那样磁盘上根本没有这个 .py）。
+    # 踩过：v2.4.0 的 exe 漏了这一行，用户点救砖报「找不到 ttl_rescue.py」。
+    _path = find_resource("ttl_rescue.py")
+    if not _path:
+        problems.append("找不到 ttl_rescue.py —— TTL / XMODEM 救砖功能不可用"
+                        "（build_exe.spec 的 datas 里必须带上它）")
+        print("  [✗] ttl_rescue.py 未找到 —— 救砖功能不可用")
+    else:
+        try:
+            import importlib.util
+            _spec = importlib.util.spec_from_file_location("ttl_rescue_selftest", _path)
+            _mod = importlib.util.module_from_spec(_spec)
+            _spec.loader.exec_module(_mod)
+            # 真跑一遍内存回环的 XMODEM 收发，确认分块/CRC/重传/EOT 链路是通的
+            _rc = _mod.selftest(verbose=False)
+            if _rc != 0:
+                raise RuntimeError(f"内置回环自检返回 {_rc}")
+            print(f"  [✓] ttl_rescue.py 加载成功（XMODEM 回环自检通过，"
+                  f"默认波特率 {_mod.DEFAULT_BAUD}）")
+        except Exception as e:  # noqa: BLE001
+            problems.append(f"ttl_rescue.py 加载失败: {type(e).__name__}: {e}")
+            print(f"  [✗] ttl_rescue.py — {type(e).__name__}: {e}")
+
+    # 4b. 闪存 ECC 判定。flash.py 里是 `import nandcheck`，漏了不会崩
+    # （有 try/except 兜底，只会打印「跳过闪存兼容性检查」），但华邦机型那道闸
+    # 会**静默失效** —— 这比崩了更糟，所以冻结环境下缺了也要判失败。
+    try:
+        import nandcheck
+        _chip = nandcheck.KNOWN_PARALLEL_NAND.get((0xEF, 0xDA, 0x069510))
+        if not _chip:
+            raise RuntimeError("颗粒表里查不到 W29N02KVSIAF")
+        print(f"  [✓] nandcheck.py（颗粒表 {len(nandcheck.KNOWN_PARALLEL_NAND)} 条，"
+              f"{_chip[1]} 在华邦 ECC 黑名单里）")
+    except Exception as e:  # noqa: BLE001
+        problems.append(f"nandcheck.py 加载失败: {type(e).__name__}: {e} —— "
+                        f"华邦机型的 ECC 拦截会失效")
+        print(f"  [✗] nandcheck.py — {type(e).__name__}: {e}")
 
     # 5. tcboot.bin（刷机才需要，缺了只提示）
     if find_resource("tcboot.bin"):
