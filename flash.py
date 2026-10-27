@@ -63,36 +63,50 @@ except Exception:
     except Exception:
         VERSION = "0.0.0"
 
-# ================== 配置区 ==================
-ROUTER_IP = "192.168.1.1"
+# 设备运行期状态：光猫地址 / 机型档案 / telnet 凭据 / 网页凭据 / MAC。
+# 以前这些是本文件配置区里的模块级全局变量（ROUTER_IP、MODEL_TELNET_USER、
+# PASSWORD、MODEL_MAC…30 多个），靠 _load_model_globals() 一条条 global 赋值。
+# 问题出在「谁忘了灌就静默用默认值」：命令行走 main() 会灌，GUI 走 run_flow()
+# 没灌 —— 贝尔机型于是拿着空的机型账号跑「探测 + 逐个试」那条路，用户在界面
+# 填的铭牌密码也从来没生效（2026-10 报障，见 HANDOFF）。
+# 现在按类别拆进 device.py，灌值的**唯一入口**是 device.configure_device()，
+# run_flow() 开头必定会调一次。
+# 与 version 同样的加载姿势：flash.py 是被 gui.py 用 importlib 动态加载的，
+# sys.path 里不一定有它自己的目录。
+try:
+    from device import NET, PROFILE, TELNET, WEB, MAC
+    import device as device_mod
+except Exception:
+    import importlib.util as _ilu_device
+    _dp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "device.py")
+    _dspec = _ilu_device.spec_from_file_location("device", _dp)
+    device_mod = _ilu_device.module_from_spec(_dspec)
+    sys.modules.setdefault("device", device_mod)
+    _dspec.loader.exec_module(device_mod)
+    NET, PROFILE, TELNET, WEB, MAC = (device_mod.NET, device_mod.PROFILE,
+                                      device_mod.TELNET, device_mod.WEB,
+                                      device_mod.MAC)
 
-# --- 机型（见 models.py）---
-# 机型决定了网页端口、超级账号、su 目标、是否需要 FTP 才能提权、
-# 以及哪些功能可用。GUI 和命令行都通过 config.apply_model() 写这三个变量。
-# 直接跑 flash.py 时用默认机型（贝尔移动版），行为与以前完全一致。
-MODEL = None                     # 机型对象（None = 用 BEL 默认值）
-WEB_PORT = 80                    # 管理网页端口（烽火是 8080）
-NEED_FTP_FOR_SU = True           # 提权前是否必须先开 FTP（贝尔 True，烽火 False）
-SUPPORTS_WEB_TELNET = True       # 是否有「网页一键开 telnet」接口
-SUPPORTS_STOCK2UBI = True        # 是否能用 an758x-stock2ubi
-SUPPORTS_UBOOT_FLASH = True      # 是否能刷 tcboot.bin 到 mtd0
-MODEL_TELNET_USER = ""           # 机型固定的 telnet 账号（空=用 USERNAME）
-MODEL_SU_USER = ""               # 机型固定的 su 账号（空=用 SU_USER）
-MODEL_MAC = ""                   # 光猫 MAC（烽火用它推导密码 / 开 telnet）
-# 机型档案里的密码（由 _load_model_globals 从 models.py 灌进来）。
-# 为什么要和 PASSWORD 分开存：PASSWORD 是「用户配置/命令行指定」的值，
-# MODEL_PASSWORD 是「固件里解出来的固定值」。两者可能不同（用户改了配置），
-# 而 telnet 认证失败 3 次就锁 300 秒，所以必须记住哪个是机型自带的、
-# 才能在 --model 切换时正确地重新排序候选（见 _password_candidates）。
-MODEL_PASSWORD = ""              # 机型固定 telnet 密码（不含 MAC 后缀）
-MODEL_PASSWORD_PREFIX = ""       # 「固定值 + MAC 后 6 位」规则里的固定前缀
-MODEL_TELNET_PASSWORD_FROM_MAC = False  # 机型密码是否本来就由 MAC 推导
-TELNET_PASSWORD_TRY_MAC_SUFFIX = False  # 是否额外试「固定值+MAC后6位」的流传版本
-MODEL_SU_PASSWORD = ""           # 机型固定 su 密码
-MODEL_SU_PASSWORD_PREFIX = ""    # su 密码的 MAC 前缀（烽火 Fh@）
-TELNET_ENABLE_MODE = "web"       # 开 telnet 的方式：web / fhtool / manual
-BACKUP_TRANSPORT = "auto"        # 备份传输：curl / tftp / auto（先试 curl）
-MODEL_FAMILY = "bel"             # 机型家族：bel / fh（决定是否生成 1 MiB factory）
+# ================== 配置区 ==================
+# 光猫地址 / 机型档案 / telnet 与网页凭据都在 device.py 里，本文件不再有这些
+# 全局变量。对应关系（左边是旧名字）：
+#   ROUTER_IP / WEB_PORT / TELNET_PORT   → NET.router_ip / NET.web_port / NET.telnet_port
+#   MODEL / MODEL_FAMILY                 → PROFILE.model / PROFILE.family
+#   MODEL_TELNET_USER / MODEL_SU_USER    → PROFILE.telnet_user / PROFILE.su_user
+#   MODEL_PASSWORD(_PREFIX/_FROM_MAC)    → PROFILE.telnet_password(_prefix/_from_mac)
+#   TELNET_PASSWORD_TRY_MAC_SUFFIX       → PROFILE.telnet_password_try_mac_suffix
+#   MODEL_SU_PASSWORD(_PREFIX)           → PROFILE.su_password / PROFILE.su_password_prefix
+#   NEED_FTP_FOR_SU / SUPPORTS_* / TELNET_ENABLE_MODE / BACKUP_TRANSPORT
+#                                        → PROFILE 上的同名字段
+#   USERNAME(_CANDIDATES) / AUTO_DETECT_USERNAME
+#                                        → TELNET.username / .username_candidates / .auto_detect_username
+#   PASSWORD / SU_USER / ROOT_PASSWORD    → TELNET.password / .su_user / .su_password
+#   MANUAL_TELNET_PASSWORD / MANUAL_SU_PASSWORD
+#                                        → TELNET.manual_password / .manual_su_password
+#   _RECOVERED_PASSWORD                  → TELNET.recovered_password
+#   SUPER_USER / SUPER_PASSWORD          → WEB.username / WEB.password
+#   MODEL_MAC                            → MAC.value（统一无分隔大写形式）
+
 # 备份后自动生成的 OpenWrt 用 factory 镜像文件名。
 # 为什么要生成：刷 OpenWrt 时 U-Boot 里要单独刷 factory 数据，而原厂 factory
 # 分区是 3 MiB 的 JFFS2/UBI 容器，不能直接喂给 U-Boot，必须按
@@ -111,18 +125,15 @@ AUTO_REBOOT_ASK = False            # True 则每次重启前询问（命令行�
 
 # --- 运行时找回的 telnet 密码 ---
 # 认证被拒后，烽火可以走「免登录」通道（fh_tool 的 GetTelnetInfo，或下载
-# param.pdt.enc 后本地解密）取回真实密码。取回的密码只放在这个变量里、
-# **不写 config.ini** —— 用户没确认过的密码不该被持久化。
-# 它会被 _password_candidates() 排到候选第一位。
-_RECOVERED_PASSWORD = ""
+# param.pdt.enc 后本地解密）取回真实密码。取回的密码只放在
+# TELNET.recovered_password 里、**不写 config.ini** —— 用户没确认过的密码
+# 不该被持久化。它会被 TELNET.password_candidates() 排到候选最前面。
 
 # --- 用户手动指定的 telnet / su 密码（界面或 config.ini 填的）---
 # 用途：本工具的内置密钥解不开某个新固件时，用户可能用别的工具（论坛脚本、
 # 厂商工具、自己逆向）解出了真实密码，那就让他直接填进来，程序优先用。
-# 与 PASSWORD / ROOT_PASSWORD 的区别：那两个会被机型档案覆盖（见
-# _load_model_globals），这两个**永远不覆盖**，用户填了就是最高优先级。
-MANUAL_TELNET_PASSWORD = ""
-MANUAL_SU_PASSWORD = ""
+# 存在 TELNET.manual_password / TELNET.manual_su_password：这两个**永远不被
+# 机型档案覆盖**，用户填了就是最高优先级。
 
 # --- TTL / 串口控制台（拆机接线，不依赖网络）---
 # 与 telnet 路线的关系：两条路**二选一**。走 TTL 时完全不需要开 Telnet/FTP、
@@ -136,12 +147,11 @@ SERIAL_USER = "root"               # 串口控制台登录账号（多数机型�
 SERIAL_PASSWORD = ""               # 串口 root 密码；留空则直接回车（免密机型）
 
 # 不同型号/固件的 telnet 账号不一样（有的 useradmin，有的 user）。
-# 留空 AUTO_DETECT_USERNAME=True 时，工具会从登录页 JS 里读出该机型实际的
-# telnet 账号（页面会 $("input[name='name']").val("xxx") 预填），
-# 读不到再按 USERNAME_CANDIDATES 逐个尝试。
-AUTO_DETECT_USERNAME = True
-USERNAME = "user"                # 手动指定时用这个（XG-040G-MD 移动版实测为 user）
-USERNAME_CANDIDATES = ["user", "useradmin"]  # 自动探测失败时的候选顺序（不要加 admin：错的候选会白耗一次认证机会）
+# TELNET.auto_detect_username=True 时会从登录页 JS 里读出该机型实际的 telnet
+# 账号（页面会 $("input[name='name']").val("xxx") 预填），读不到再按
+# TELNET.username_candidates 逐个尝试；界面/命令行明确给过账号时
+# （TELNET.username_explicit）就直接用它，不探测也不试错。
+# 候选顺序见 TELNET.__init__（不要加 admin：错的候选会白耗一次认证机会）。
 
 # 烽火各型号流传的「弱口令」组合（账号, 密码）。
 #
@@ -163,17 +173,20 @@ WEAK_CREDENTIALS = [
     ("root",         "abcd"),             # 社区汇总
 ]
 # 上面的 `{mac6}` 会被替换成 MAC 后 6 位（大写）。大小写两种都试（本地比对免费）。
-PASSWORD = "j3ba73@8"            # telnet 登录密码（光猫底部铭牌上的那一个）
-# su 提权用的账号。原脚本写的是 useradmin_ftp，但 XG-040G-MD 当前固件的
-# /etc/passwd 里根本没有这个账号（只有 root / user-common / osgi_admin / user-telnet），
-# 提权路径：telnet 用 `user`/`j3ba73@8` 登录后，`su user_ftp`（密码同样是
-# telnet 密码）即可直接拿到 root —— 提示符从 `$` 变成 `#`，`whoami` 返回 root。
-# 注意 `user_ftp` 账号在 /etc/passwd 里并不存在（那里只有 root / user-common /
-# osgi_admin / user-telnet），它是**启用 FTP 服务后由 `IGD FTP Server` 动态注入**的。
-# 所以：没开 FTP 时 su 一定失败（su: unknown user）；开了 FTP 才能用这条路径。
-# 另一个副作用是启用 FTP 后要记得用网页把它关掉，避免长期暴露 21 端口。
-SU_USER = "user_ftp"
-ROOT_PASSWORD = PASSWORD         # su user_ftp 的密码就是 telnet 登录密码
+
+# --- telnet / su 凭据（默认值在 device.TelnetAuth 里）---
+# TELNET.password    = telnet 登录密码（光猫底部铭牌上的那一个），默认 j3ba73@8
+# TELNET.su_user     = su 提权用的账号，默认 user_ftp
+# TELNET.su_password = su 密码，默认跟 telnet 密码相同（贝尔的规则）
+#
+# su 提权账号为什么是 user_ftp：原脚本写的是 useradmin_ftp，但 XG-040G-MD 当前
+# 固件的 /etc/passwd 里根本没有这个账号（只有 root / user-common / osgi_admin /
+# user-telnet）。提权路径：telnet 用 `user`/`j3ba73@8` 登录后，`su user_ftp`
+# （密码同样是 telnet 密码）即可直接拿到 root —— 提示符从 `$` 变成 `#`。
+# 注意 `user_ftp` 在 /etc/passwd 里并不存在，它是**启用 FTP 服务后由
+# `IGD FTP Server` 动态注入**的。所以：没开 FTP 时 su 一定失败（su: unknown
+# user）；开了 FTP 才能用这条路径，用完记得用网页把它关掉，避免长期暴露 21 端口。
+#
 # 注意：非 root 身份下 busybox 会直接拒绝执行 dd
 #   （dd: you have no permission to run this applet!），
 # 而 /dev/mtd* 是 crw-rw---- root root，所以备份和刷写都必须先拿到 root。
@@ -191,9 +204,10 @@ MODE = "backup"
 
 # --- 自动开启 Telnet（免拆机）配置 ---
 AUTO_ENABLE_TELNET = True        # 刷机前自动通过网页开启 Telnet；False 则跳过（假定已手动开启）
-SUPER_USER = "CMCCAdmin"         # 超级账号（移动版恢复出厂默认）
-SUPER_PASSWORD = "aDm8H%MdA"     # 超级密码（移动版恢复出厂默认）
-TELNET_PORT = 23                 # Telnet 服务端口
+# 网页超级账号（开 telnet / 备份前登录用）在 WEB 对象里：WEB.username 默认
+# CMCCAdmin、WEB.password 默认 aDm8H%MdA（移动版恢复出厂默认）。机型档案里
+# 有定义时（烽火 nE7jA%5m）会被 device.configure_device() 覆盖。
+# Telnet 服务端口在 NET.telnet_port（默认 23，机型可覆盖）。
 WEB_SESSION_RETRY = 2400         # 超级账号网页会话被占用时最长等待秒数（单会话限制，默认最多等 40 分钟）
 WEB_SESSION_POLL = 20            # 等待会话释放时的轮询间隔（秒）
 
@@ -504,8 +518,7 @@ def is_port_open(host, port, timeout=3):
 
 def web_base():
     """管理网页的根地址（端口随机型变，烽火是 8080）。"""
-    port = int(WEB_PORT or 80)
-    return f"http://{ROUTER_IP}" if port == 80 else f"http://{ROUTER_IP}:{port}"
+    return NET.web_base()
 
 
 def _web_get(op, url, timeout=10):
@@ -532,7 +545,7 @@ def _web_login():
     op = urllib_request.build_opener(urllib_request.HTTPCookieProcessor(cj))
     _web_get(op, base + "/")  # 先 GET 首页拿到初始 cookie
     data = urllib_parse.urlencode(
-        {"newMethodLogin": "1", "name": SUPER_USER, "pswd": SUPER_PASSWORD},
+        {"newMethodLogin": "1", "name": WEB.username, "pswd": WEB.password},
         quote_via=urllib_parse.quote).encode()
     req = urllib_request.Request(
         base + "/login.cgi", data=data,
@@ -624,12 +637,12 @@ def _wait_after_reboot():
     开始重启），如果直接等「端口可连」就会在设备还没重启时就立刻判定成功，
     后面的操作全部落空。先确认它掉线，才能证明重启真的执行了。
     """
-    port = int(WEB_PORT or 80)
+    port = int(NET.web_port or 80)
     print("[*] 等待光猫重启（通常 1~3 分钟）...")
     time.sleep(5)
     gone = False
     for _ in range(30):
-        if not is_port_open(ROUTER_IP, port, timeout=2):
+        if not is_port_open(NET.router_ip, port, timeout=2):
             gone = True
             break
         time.sleep(2)
@@ -640,7 +653,7 @@ def _wait_after_reboot():
 
     for i in range(90):
         time.sleep(5)
-        if is_port_open(ROUTER_IP, port, timeout=2):
+        if is_port_open(NET.router_ip, port, timeout=2):
             time.sleep(8)  # 让 web 服务彻底就绪
             print(f"[✓] 光猫已恢复响应（约 {(i + 1) * 5 + 13} 秒）")
             return True
@@ -652,14 +665,14 @@ def model_reboot():
     """按机型重启光猫（用于清掉 telnet 认证锁定）。
 
     两条路径：
-      - 烽火（TELNET_ENABLE_MODE == "fhtool"）：走 8080 上的 fh_tool 加密 RPC
+      - 烽火（PROFILE.telnet_enable == "fhtool"）：走 8080 上的 fh_tool 加密 RPC
         DeviceReboot。**不需要登录、不需要超级密码**，所以即使 telnet 被锁、
         网页会话被占，这条路依然可用 —— 这正是它作为解锁手段的价值。
       - 贝尔：走管理页 POST /system.cgi?reboot（要先登录超级账号）。
     返回是否成功恢复。
     """
-    if TELNET_ENABLE_MODE == "fhtool":
-        mac = (MODEL_MAC or "").strip()
+    if PROFILE.telnet_enable == "fhtool":
+        mac = (MAC.value or "").strip()
         try:
             import fhtool
         except Exception as e:  # noqa: BLE001
@@ -670,7 +683,7 @@ def model_reboot():
             return reboot_router()
         print(f"[*] 通过 fh_tool RPC 重启光猫（MAC {fhtool.normalize_mac(mac)}）...")
         try:
-            client = fhtool.FhClient(ROUTER_IP, mac, port=WEB_PORT, timeout=8.0)
+            client = fhtool.FhClient(NET.router_ip, mac, port=NET.web_port, timeout=8.0)
             client.reboot()
         except Exception as e:  # noqa: BLE001
             print(f"[!] fh_tool 重启失败：{type(e).__name__}: {e}")
@@ -701,7 +714,7 @@ def _web_login_with_retry(retry_seconds=None, purpose="操作"):
     实测从不会返回「已经登录」；所以烽火机型不做长等待、也不弹重启询问 ——
     真登录失败就是账号密码不对，等 40 分钟毫无意义，只会让用户以为卡死。
     """
-    if MODEL_FAMILY == "fh":
+    if PROFILE.family == "fh":
         retry_seconds = 0
     if retry_seconds is None:
         retry_seconds = WEB_SESSION_RETRY
@@ -719,14 +732,14 @@ def _web_login_with_retry(retry_seconds=None, purpose="操作"):
 
         # 登录未通过（HTTP 200 + 登录页）
         if "已经登录" in body:
-            if MODEL_FAMILY == "fh":
+            if PROFILE.family == "fh":
                 # 理论上到不了这里；真到了说明这版烽火固件也加了限制。
-                print(f"[!] 超级账号 {SUPER_USER} 当前已在网页在线（单会话限制）。")
+                print(f"[!] 超级账号 {WEB.username} 当前已在网页在线（单会话限制）。")
                 print("[!] 烽火机型一般没有这条限制，请先退出光猫网页上的登录，再重试。")
                 break
             remain = max(0, int(deadline - time.time()))
             if remain > 0:
-                print(f"[!] 超级账号 {SUPER_USER} 当前已在网页在线（单会话限制），"
+                print(f"[!] 超级账号 {WEB.username} 当前已在网页在线（单会话限制），"
                       f"等待其超时释放 ...（剩余约 {remain // 60} 分钟；Ctrl+C 可随时中止）")
                 time.sleep(min(WEB_SESSION_POLL, remain))
                 continue
@@ -747,12 +760,12 @@ def _web_login_with_retry(retry_seconds=None, purpose="操作"):
             break
         m = re.search(r"<font[^>]*>(.*?)</font>", body, re.S)
         print(f"[!] 网页登录失败：{m.group(1).strip() if m else '未知错误（HTTP ' + str(status) + '）'}"
-              f"，请检查 SUPER_USER / SUPER_PASSWORD 是否与光猫一致。")
+              f"，请检查 WEB.username / WEB.password 是否与光猫一致。")
         break
     return None, False
 
 def ensure_model_mac(quiet=False):
-    """确保 MODEL_MAC 有值；烽火机型可直接从设备读回，不用用户手抄。
+    """确保 MAC.value 有值；烽火机型可直接从设备读回，不用用户手抄。
 
     为什么值得单独做：烽火的 fh_tool 加密密钥 = SHA256(MAC)，
     MAC 抄错一位算出来的密钥就全错，设备只会回一个 403 —— 从错误信息
@@ -763,21 +776,20 @@ def ensure_model_mac(quiet=False):
 
     返回最终生效的 MAC（可能为空串）。
     """
-    global MODEL_MAC
-    if MODEL_MAC:
-        return MODEL_MAC
-    if TELNET_ENABLE_MODE != "fhtool":
-        return MODEL_MAC
+    if MAC.value:
+        return MAC.value
+    if PROFILE.telnet_enable != "fhtool":
+        return MAC.value
     try:
         import fhtool
     except Exception:  # noqa: BLE001
-        return MODEL_MAC
-    mac = fhtool.probe_mac(ROUTER_IP, port=WEB_PORT, timeout=6.0)
+        return MAC.value
+    mac = fhtool.probe_mac(NET.router_ip, port=NET.web_port, timeout=6.0)
     if mac:
-        MODEL_MAC = mac
+        MAC.set(mac)
         if not quiet:
             print(f"[*] 已从设备读回 MAC: {mac}（无需手填）")
-    return MODEL_MAC
+    return MAC.value
 
 
 def enable_telnet_via_fhtool(mac, retry_seconds=None):
@@ -789,8 +801,8 @@ def enable_telnet_via_fhtool(mac, retry_seconds=None):
 
     这条路径不碰网页会话，所以不受「单会话限制」影响，也不需要超级密码。
     """
-    if is_port_open(ROUTER_IP, TELNET_PORT):
-        print(f"[✓] 检测到 Telnet 已开启（{ROUTER_IP}:{TELNET_PORT}），跳过开启步骤。")
+    if is_port_open(NET.router_ip, NET.telnet_port):
+        print(f"[✓] 检测到 Telnet 已开启（{NET.router_ip}:{NET.telnet_port}），跳过开启步骤。")
         return
     try:
         import fhtool
@@ -804,7 +816,7 @@ def enable_telnet_via_fhtool(mac, retry_seconds=None):
         sys.exit(1)
 
     print(f"[*] 通过 fh_tool RPC 开启 Telnet（MAC {fhtool.normalize_mac(mac)}）...")
-    client = fhtool.FhClient(ROUTER_IP, mac, port=WEB_PORT, timeout=8.0)
+    client = fhtool.FhClient(NET.router_ip, mac, port=NET.web_port, timeout=8.0)
     try:
         client.telnet_enabled(True)
     except Exception as e:  # noqa: BLE001
@@ -813,8 +825,8 @@ def enable_telnet_via_fhtool(mac, retry_seconds=None):
         sys.exit(1)
     # 等 telnetd 起来
     for _ in range(15):
-        if is_port_open(ROUTER_IP, TELNET_PORT, timeout=2):
-            print(f"[✓] Telnet 已开启（{ROUTER_IP}:{TELNET_PORT}）")
+        if is_port_open(NET.router_ip, NET.telnet_port, timeout=2):
+            print(f"[✓] Telnet 已开启（{NET.router_ip}:{NET.telnet_port}）")
             return
         time.sleep(1)
     print("[!] fh_tool 返回成功，但 telnet 端口仍未监听。请稍等再试，或重启光猫。")
@@ -832,12 +844,12 @@ def enable_telnet_via_web(retry_seconds=None):
           设备端不校验页面里的 csrf_token），成功时返回 "Factory Telnet on !"。
       3) 开启后主动 login.cgi?out 退出，释放这个唯一会话。
     """
-    if is_port_open(ROUTER_IP, TELNET_PORT):
-        print(f"[✓] 检测到 Telnet 已开启（{ROUTER_IP}:{TELNET_PORT}），跳过网页开启步骤。")
+    if is_port_open(NET.router_ip, NET.telnet_port):
+        print(f"[✓] 检测到 Telnet 已开启（{NET.router_ip}:{NET.telnet_port}），跳过网页开启步骤。")
         return
 
     base = web_base()
-    print(f"[*] 通过超级账号登录网页（{SUPER_USER}）自动开启 Telnet ...")
+    print(f"[*] 通过超级账号登录网页（{WEB.username}）自动开启 Telnet ...")
     op, ok = _web_login_with_retry(retry_seconds, purpose="开启 Telnet")
     if ok:
         try:
@@ -853,7 +865,7 @@ def enable_telnet_via_web(retry_seconds=None):
         telnet_ok = False
         for _ in range(15):
             time.sleep(1)
-            if is_port_open(ROUTER_IP, TELNET_PORT):
+            if is_port_open(NET.router_ip, NET.telnet_port):
                 telnet_ok = True
                 break
         try:
@@ -862,14 +874,14 @@ def enable_telnet_via_web(retry_seconds=None):
             pass
         _web_logout(op)
         if not telnet_ok:
-            print(f"[!] 操作后 Telnet（{ROUTER_IP}:{TELNET_PORT}）仍未开启，"
+            print(f"[!] 操作后 Telnet（{NET.router_ip}:{NET.telnet_port}）仍未开启，"
                   f"请确认该型号/固件支持本方式，或手动到网页开启。")
             sys.exit(1)
         print("[✓] Telnet 已开启")
         return
 
     print("[✗] 无法自动开启 Telnet。请手动操作后重试：")
-    print("    1) 浏览器登录 http://192.168.1.1（超级账号 " + SUPER_USER + " / 超级密码）")
+    print("    1) 浏览器登录 http://192.168.1.1（超级账号 " + WEB.username + " / 超级密码）")
     print("    2) 管理页 → 设备管理 → 设备重启（清掉占用中的网页会话）")
     print("    3) Telnet 设置页点「开启」按钮，或直接运行本工具（检测到 23 端口已开会自动跳过网页步骤）")
     sys.exit(1)
@@ -889,12 +901,12 @@ def enable_ftp_via_web(retry_seconds=None):
 
     注意：**不带 csrf_token 的 POST 会返回 302 并作废当前会话**，所以必须抓取。
     """
-    if is_port_open(ROUTER_IP, FTP_PORT):
-        print(f"[✓] 检测到 FTP 已开启（{ROUTER_IP}:{FTP_PORT}），跳过网页开启步骤。")
+    if is_port_open(NET.router_ip, FTP_PORT):
+        print(f"[✓] 检测到 FTP 已开启（{NET.router_ip}:{FTP_PORT}），跳过网页开启步骤。")
         return
 
     base = web_base()
-    print(f"[*] 通过超级账号登录网页（{SUPER_USER}）自动开启 FTP ...")
+    print(f"[*] 通过超级账号登录网页（{WEB.username}）自动开启 FTP ...")
     op, ok = _web_login_with_retry(retry_seconds, purpose="开启 FTP")
     if not ok:
         print("[✗] 无法自动开启 FTP。请手动操作后重试：")
@@ -926,7 +938,7 @@ def enable_ftp_via_web(retry_seconds=None):
         ftp_ok = False
         for _ in range(20):
             time.sleep(1)
-            if is_port_open(ROUTER_IP, FTP_PORT):
+            if is_port_open(NET.router_ip, FTP_PORT):
                 ftp_ok = True
                 break
         try:
@@ -939,7 +951,7 @@ def enable_ftp_via_web(retry_seconds=None):
         _web_logout(op)
 
     if not ftp_ok:
-        print(f"[!] 操作后 FTP（{ROUTER_IP}:{FTP_PORT}）仍未开启。")
+        print(f"[!] 操作后 FTP（{NET.router_ip}:{FTP_PORT}）仍未开启。")
         print("[!] 没有 FTP 就无法用 su user_ftp 提权，备份/刷写都无法进行。")
         sys.exit(1)
     print("[✓] FTP 已开启（su user_ftp 提权路径已就绪）")
@@ -1201,7 +1213,7 @@ def telnet_connect(retries=6, backoff=30):
     last = ""
     for i in range(retries):
         try:
-            tn = telnetlib.Telnet(ROUTER_IP, timeout=10)
+            tn = telnetlib.Telnet(NET.router_ip, timeout=10)
         except Exception as e:
             last = f"连接失败 {e!r}"
             print(f"[!] {last}，{backoff} 秒后重试 {i + 1}/{retries} ...")
@@ -1245,98 +1257,35 @@ def detect_telnet_username():
 def _prepend_password_candidate(password):
     """把运行时找回的密码插到候选最前面（本次进程内生效）。
 
-    为什么用全局而不用返回值：`_telnet_login_once` 内部自己调
-    `_password_candidates()`，把找回的密码存进这个全局最省改动，也不会
-    污染 config.ini —— 用户没确认过的密码不该被写进配置文件。
+    存在 ``TELNET.recovered_password`` 里、**不写 config.ini** —— 用户没确认过
+    的密码不该被持久化。``_telnet_login_once`` 内部自己调
+    ``_password_candidates()``，所以这里不需要返回值。
     """
-    if not password:
-        return
-    global _RECOVERED_PASSWORD
-    _RECOVERED_PASSWORD = password
+    TELNET.prepend_recovered(password)
 
 
 def _password_candidates():
     """按可能性排序返回 telnet 密码候选（去重、去空）。
 
-    优先级：用户手填的 > 运行时从设备找回的 > 机型静态候选。
-    手填的排最前是因为「本工具解不开、用户用别的工具解开了」这种情况下，
-    用户的答案比任何猜测都可靠，不该再让他白烧认证机会。
+    顺序与理由都在 ``device.TelnetAuth.password_candidates()``：
+    用户手填的 > 运行时从设备找回的 > 机型静态候选。
     """
-    out = []
-
-    def _add(p):
-        if p and p not in out:
-            out.append(p)
-
-    # 0) 用户手动指定的密码（界面「手动指定」框 / config.ini [fh] 段）
-    _add(MANUAL_TELNET_PASSWORD)
-    # 1) 运行时从设备取回的真实密码
-    _add(_RECOVERED_PASSWORD)
-    return out + _password_candidates_static()
+    return TELNET.password_candidates(PROFILE, MAC)
 
 
 def _password_candidates_static():
     """静态候选（机型固定值 / 用户配置 / MAC 后缀变体）。"""
-    out = []
-
-    def _add(p):
-        if p and p not in out:
-            out.append(p)
-
-    # 1) 机型档案的固定密码
-    _add(MODEL_PASSWORD)
-    # 2) 用户配置的密码
-    _add(PASSWORD)
-    # 3) 固定密码 + MAC 后 6 位（大小写两种，因为教程里两种写法都出现过）
-    if MODEL_PASSWORD and (TELNET_PASSWORD_TRY_MAC_SUFFIX or MODEL_TELNET_PASSWORD_FROM_MAC):
-        suffix = (MODEL_MAC or "").replace(":", "").replace("-", "").upper()
-        if len(suffix) >= 6:
-            tail = suffix[-6:]
-            if MODEL_TELNET_PASSWORD_FROM_MAC:
-                # 机型规则本来就是「前缀+MAC后6位」，那么派生值才是首选
-                _add(f"{MODEL_PASSWORD_PREFIX}{tail}")
-                _add(f"{MODEL_PASSWORD_PREFIX}{tail.lower()}")
-            else:
-                # 机型规则是固定值，MAC 后缀只是**流传的另一种说法**，排在后面
-                _add(f"{MODEL_PASSWORD}{tail}")
-                _add(f"{MODEL_PASSWORD}{tail.lower()}")
-                if MODEL_PASSWORD_PREFIX:
-                    _add(f"{MODEL_PASSWORD_PREFIX}{tail}")
-                    _add(f"{MODEL_PASSWORD_PREFIX}{tail.lower()}")
-    return out or [PASSWORD]
+    return TELNET.static_password_candidates(PROFILE, MAC)
 
 
 def _su_password_candidates():
     """按可能性排序返回 su（提权）密码候选。
 
-    与 telnet 密码分开的原因：两个密码的**来源不同**。
-      - 贝尔：su user_ftp 的密码就是 telnet 密码（同一个）；
-      - 烽火：su root 的密码是 `Fh@ + MAC 后 6 位大写`，和 telnet 密码无关。
-    如果把两者混在一个列表里，烽火会先拿 telnet 密码去 su，多烧一次机会。
+    顺序与理由都在 ``device.TelnetAuth.su_password_candidates()``：贝尔的 su
+    密码就是 telnet 密码，烽火的是 ``Fh@ + MAC 后 6 位``，两者的来源不同，
+    混在一个列表里会白烧一次认证机会（连错 3 次锁 300 秒）。
     """
-    out = []
-
-    def _add(p):
-        if p and p not in out:
-            out.append(p)
-
-    # 0) 用户手动指定的 su 密码（本工具解不开、用户自己弄到了）
-    _add(MANUAL_SU_PASSWORD)
-    # 1) 由 MAC 推导的（烽火：Fh@ + MAC 后 6 位，大写）
-    if MODEL_SU_PASSWORD_PREFIX:
-        suffix = (MODEL_MAC or "").replace(":", "").replace("-", "").upper()
-        if len(suffix) >= 6:
-            tail = suffix[-6:]
-            _add(f"{MODEL_SU_PASSWORD_PREFIX}{tail}")
-            _add(f"{MODEL_SU_PASSWORD_PREFIX}{tail.lower()}")
-    # 2) 机型档案里的固定 su 密码
-    _add(MODEL_SU_PASSWORD)
-    # 3) 用户配置的 ROOT_PASSWORD（config.ini 里可能手填过）
-    _add(ROOT_PASSWORD)
-    # 4) 最后才退到 telnet 密码（贝尔就是这种情况：两者相同）
-    if NEED_FTP_FOR_SU or not MODEL_SU_PASSWORD_PREFIX:
-        _add(PASSWORD)
-    return out or [ROOT_PASSWORD or PASSWORD]
+    return TELNET.su_password_candidates(PROFILE, MAC)
 
 
 def _telnet_login_once(candidates, retries=6, backoff=30):
@@ -1359,7 +1308,7 @@ def _telnet_login_once(candidates, retries=6, backoff=30):
     passwords = _password_candidates()
     for idx, user in enumerate(candidates):
         if tn is None:
-            print(f"[*] 连接光猫 {ROUTER_IP}...")
+            print(f"[*] 连接光猫 {NET.router_ip}...")
             tn = telnet_connect(retries=retries, backoff=backoff)
             if tn is None:
                 return None, None, "conn"
@@ -1511,7 +1460,7 @@ def _weak_credentials():
     烽火连错 3 次锁 300 秒，十几组在线试一遍必然把设备锁死。而免登录通道能
     读到 `/var/tel_passwd` 里的哈希，本地算哈希是免费的 —— 命中才去登录。
     """
-    mac6 = (MODEL_MAC or "").replace(":", "").replace("-", "").upper()
+    mac6 = (MAC.value or "").replace(":", "").replace("-", "").upper()
     mac6 = mac6[-6:] if len(mac6) >= 6 else ""
     out = []
     for user, pwd in WEAK_CREDENTIALS:
@@ -1542,7 +1491,7 @@ def _probe_password_by_hash(quiet=False):
 
     返回 {"username":…, "password":…, "source":…} 或 None。
     """
-    if MODEL_FAMILY != "fh":
+    if PROFILE.family != "fh":
         return None
     try:
         import fhtool
@@ -1556,7 +1505,7 @@ def _probe_password_by_hash(quiet=False):
         return None
 
     ensure_model_mac()
-    mac = MODEL_MAC
+    mac = MAC.value
     if not mac:
         if not quiet:
             print("[!] 读不到光猫 MAC，免登录通道用不了（密钥由 MAC 派生）")
@@ -1572,7 +1521,7 @@ def _probe_password_by_hash(quiet=False):
     if not quiet:
         print()
         print("[*] 先用免登录通道核对 telnet 密码（不消耗认证机会）...")
-    client = fhtool.FhClient(ROUTER_IP, mac, port=WEB_PORT)
+    client = fhtool.FhClient(NET.router_ip, mac, port=NET.web_port)
 
     # ---- 步骤 1：取密码文件，本地比哈希 ----
     tmpdir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_recover")
@@ -1609,7 +1558,7 @@ def _probe_password_by_hash(quiet=False):
             by_user.setdefault(u, []).append(p)
 
         # 优先比对的账号顺序：密码文件里出现的、弱口令表里有的、机型档案的
-        preferred = [u for u in hashes if u in ("telnetadmin", MODEL_TELNET_USER)]
+        preferred = [u for u in hashes if u in ("telnetadmin", PROFILE.telnet_user)]
         order = preferred + [u for u in hashes if u not in preferred]
         for user in order:
             # 这个账号的候选 = 通用候选 + 弱口令表里该账号专属的密码
@@ -1650,7 +1599,7 @@ def _try_recover_telnet_password(quiet=False):
     返回 {"username":…, "password":…, "source":…}，找不到返回 None。
     **不消耗 telnet 认证次数**，所以放在「已经被拒」之后调用是安全的。
     """
-    if MODEL_FAMILY != "fh":
+    if PROFILE.family != "fh":
         return None
     try:
         import fhtool
@@ -1664,7 +1613,7 @@ def _try_recover_telnet_password(quiet=False):
         return None
 
     ensure_model_mac()
-    mac = MODEL_MAC
+    mac = MAC.value
     if not mac:
         if not quiet:
             print("[!] 读不到光猫 MAC，免登录通道用不了（密钥由 MAC 派生）")
@@ -1673,7 +1622,7 @@ def _try_recover_telnet_password(quiet=False):
     if not quiet:
         print()
         print("[*] telnet 密码被拒，尝试用免登录通道找回真实密码 ...")
-    client = fhtool.FhClient(ROUTER_IP, mac, port=WEB_PORT)
+    client = fhtool.FhClient(NET.router_ip, mac, port=NET.web_port)
 
     # ---- 路线 1：GetTelnetInfo ----
     try:
@@ -1747,7 +1696,7 @@ def _try_recover_telnet_password(quiet=False):
             # 插入候选账号，结果用贝尔的 user 去登录烽火，必然失败）。
             uname = (found.get("TelnetUserName") or "").strip()
             if not uname:
-                uname = MODEL_TELNET_USER or ""
+                uname = PROFILE.telnet_user or ""
             return {
                 "username": "" if uname in ("root",) else uname,
                 "password": pwd,
@@ -1781,27 +1730,23 @@ def telnet_login(reenter_only=False, _su_retried=False):
     ensure_model_mac()
     # 机型固定了 telnet 账号时（烽火 telnetadmin）就直接用，不探测不试错：
     # 那个账号是机型属性，探测出来的通常是网页账号，试错还会白耗认证机会。
-    if MODEL_TELNET_USER:
-        candidates.append(MODEL_TELNET_USER)
-    if AUTO_DETECT_USERNAME and not reenter_only and not MODEL_TELNET_USER:
+    # 账号候选的顺序由 TELNET.accounts() 决定：界面明确填的账号 >
+    # 机型固定账号 > 登录页探测到的 > 候选列表。见 device.TelnetAuth.accounts。
+    det = None
+    if TELNET.wants_detect(PROFILE, reenter_only):
         det = detect_telnet_username()
         if det:
             print(f"[*] 从网页登录页自动探测到 telnet 账号: {det}")
-            candidates.append(det)
-    for u in ([USERNAME] + ([] if MODEL_TELNET_USER else list(USERNAME_CANDIDATES))):
-        if u and u not in candidates:
-            candidates.append(u)
+    candidates = TELNET.accounts(PROFILE, detected=det, reenter_only=reenter_only)
     if not candidates:
-        print("[!] 没有可用的 telnet 账号候选，请配置 USERNAME。")
+        print("[!] 没有可用的 telnet 账号候选，请检查机型选择与 telnet 账号设置。")
         sys.exit(1)
-    if reenter_only:
-        candidates = candidates[:1]
 
     # 2) 登录前先用免登录通道核对密码（只对烽火，贝尔没有这个接口）。
     #    为什么放在**连接 telnet 之前**：烽火连错 3 次就锁 300 秒，而本地
     #    比对哈希是免费的。密码对不上时还能直接从固件配置里解出明文，
     #    等于一次认证机会都不用花。
-    if MODEL_FAMILY == "fh" and not reenter_only and not _RECOVERED_PASSWORD:
+    if PROFILE.family == "fh" and not reenter_only and not TELNET.recovered_password:
         got = _probe_password_by_hash()
         if got and got.get("password"):
             if got.get("username") and got["username"] not in candidates:
@@ -1840,8 +1785,9 @@ def telnet_login(reenter_only=False, _su_retried=False):
             else:
                 print("[!] telnet 登录失败。")
                 print(f"[!] telnet 密码通常是光猫底部铭牌上的那一个"
-                      f"（当前配置 PASSWORD='{PASSWORD}'），与网页超级密码不是同一个。")
-                print("[!] 如需指定账号，请修改配置区 USERNAME / USERNAME_CANDIDATES。")
+                      f"（当前用的是 '{TELNET.password}'），与网页超级密码不是同一个。")
+                print("[!] 如需指定账号，请在界面上填「铭牌用户账号」，"
+                      "或检查机型选择。")
             sys.exit(1)
         rebooted += 1
         print()
@@ -1857,7 +1803,7 @@ def telnet_login(reenter_only=False, _su_retried=False):
         print("[✓] 登录后已是 root，跳过 su")
         return tn
 
-    su_target = MODEL_SU_USER or SU_USER
+    su_target = TELNET.su_target(PROFILE)
     print(f"[*] 切换到 {su_target} ...")
     tn.write(f"su {su_target}\n".encode())
     hit, text = expect_any(tn, ["Password:", "Error!", "not found", "unknown user", "closed"], timeout=10)
@@ -1865,7 +1811,7 @@ def telnet_login(reenter_only=False, _su_retried=False):
         print(f"[!] 切换 {su_target} 异常：{(text or '').strip()[:150]}")
         if "not found" in (text or "") or "unknown" in (text or "").lower():
             print(f"[!] 很可能 su: unknown user {su_target}")
-            if NEED_FTP_FOR_SU:
+            if PROFILE.need_ftp_for_su:
                 print("[!] 该账号只在**启用 FTP 服务**后存在，"
                       "请先在光猫网页上启用 FTP，再重试。")
         sys.exit(1)
@@ -1895,12 +1841,12 @@ def telnet_login(reenter_only=False, _su_retried=False):
     print(f"[!] su {su_target} 失败：用当前密码登录后身份仍是 {who or '未知'}。")
     print(f"[!] {su_target} 的密码（试过 {len(su_passwords)} 个候选）都不对，"
           f"请检查配置或机型选择。")
-    if NEED_FTP_FOR_SU:
+    if PROFILE.need_ftp_for_su:
         print(f"[!] 另外 su {su_target} 只在**启用 FTP 服务**后存在；"
               f"没开 FTP 会报 su: unknown user {su_target}。")
-    if MODEL_SU_PASSWORD_PREFIX:
-        print(f"[!] 本机型的 su 密码规则是「{MODEL_SU_PASSWORD_PREFIX} + MAC 后 6 位大写」，"
-              f"当前 MAC: {MODEL_MAC or '未填写'}。")
+    if PROFILE.su_password_prefix:
+        print(f"[!] 本机型的 su 密码规则是「{PROFILE.su_password_prefix} + MAC 后 6 位大写」，"
+              f"当前 MAC: {MAC.value or '未填写'}。")
     tn.close()
     # su 失败同样可能是认证计数被占满导致的，给一次自动重启的机会。
     # _su_retried 防止「su 失败 → 重启 → su 又失败」无限递归。
@@ -2541,11 +2487,11 @@ def collect_device_info(tn):
 
     # 烽火机型：用 fh_tool 的 GetDevInfo 补齐 SN / 软硬件版本。
     # 这条路不需要登录后台、不需要密码，只要 MAC 正确（无分隔符大写）。
-    if not info.get("SerialNumber") and TELNET_ENABLE_MODE == "fhtool" \
-            and MODEL_MAC:
+    if not info.get("SerialNumber") and PROFILE.telnet_enable == "fhtool" \
+            and MAC.value:
         try:
             import fhtool
-            dev = fhtool.FhClient(ROUTER_IP, MODEL_MAC, port=WEB_PORT,
+            dev = fhtool.FhClient(NET.router_ip, MAC.value, port=NET.web_port,
                                   timeout=8.0).dev_info()
             mapping = {
                 "serialnum": "SerialNumber",
@@ -2570,9 +2516,9 @@ def collect_device_info(tn):
             # 档案名写进 ModelName，闸就会拿到一个永远不匹配的字符串，
             # 等于把防护废掉。所以补位值另外记在 ModelNameFromProfile 里，
             # 闸只认 ModelName，读不到就是空 → 走「未知机型，只警告」。
-            if not info.get("ModelName") and MODEL is not None:
+            if not info.get("ModelName") and PROFILE.model is not None:
                 info["ModelNameFromProfile"] = (
-                    getattr(MODEL, "name", "") or MODEL.key)
+                    getattr(PROFILE.model, "name", "") or PROFILE.model.key)
             print(f"[*] 已通过 fh_tool GetDevInfo 读取设备信息（SN {info.get('SerialNumber', '未知')}）")
         except Exception as e:  # noqa: BLE001
             print(f"[*] fh_tool GetDevInfo 读取失败（{e}），SN 可能为空。")
@@ -2863,9 +2809,9 @@ def _stock2ubi_ensure_running(tn, local_ip, ignore_kernel=False):
     已经有人在跑（3333 端口在监听）就直接复用 —— 可能是用户自己在网页里
     开的，没必要杀掉重开。
     """
-    if is_port_open(ROUTER_IP, STOCK2UBI_PORT, timeout=2):
+    if is_port_open(NET.router_ip, STOCK2UBI_PORT, timeout=2):
         print(f"[*] {STOCK2UBI_PORT} 端口已在监听，复用设备上已有的 an758x-stock2ubi。")
-        return f"http://{ROUTER_IP}:{STOCK2UBI_PORT}"
+        return f"http://{NET.router_ip}:{STOCK2UBI_PORT}"
 
     path = find_stock2ubi()
     if not path:
@@ -2875,17 +2821,17 @@ def _stock2ubi_ensure_running(tn, local_ip, ignore_kernel=False):
         sys.exit(1)
     run_stock2ubi(tn, local_ip, path, ignore_kernel=ignore_kernel,
                   open_browser=False)
-    return f"http://{ROUTER_IP}:{STOCK2UBI_PORT}"
+    return f"http://{NET.router_ip}:{STOCK2UBI_PORT}"
 
 
 def backup_all_partitions(tn, local_ip, backup_dir, transport=None):
     """备份所有 MTD 分区到 backup_dir。
 
-    transport 为 None 时用机型默认的 BACKUP_TRANSPORT；显式传入时以参数为准
+    transport 为 None 时用机型默认的 PROFILE.backup_transport；显式传入时以参数为准
     （stock2ubi 模式已经在设备上跑起了它的 HTTP 服务，就该直接用它备份，
     没必要再按机型去挑 curl/tftp）。
 
-    三种传输方式，按机型选（BACKUP_TRANSPORT）：
+    三种传输方式，按机型选（PROFILE.backup_transport）：
       - curl：设备侧 dd 直读，curl PUT 到主机的临时 HTTP 服务器（贝尔实测
         有 curl 7.77）。请求-响应模型，不存在"监听起晚了就丢数据"的竞态。
       - tftp：设备侧 dd 直读，busybox tftp 推到主机的临时 TFTP 服务器
@@ -2899,7 +2845,7 @@ def backup_all_partitions(tn, local_ip, backup_dir, transport=None):
 
     # 传输方式：参数优先，其次机型指定的 curl/tftp/stock2ubi，
     # auto 则按设备实际能力挑
-    transport = transport or BACKUP_TRANSPORT
+    transport = transport or PROFILE.backup_transport
     if transport == "auto":
         # auto 的优先级：stock2ubi（主机主动连设备，最快且不受主机防火墙
         # 入站规则影响）→ curl → tftp。
@@ -2922,7 +2868,7 @@ def backup_all_partitions(tn, local_ip, backup_dir, transport=None):
             _backup_one_stock2ubi(i, name, base_url, backup_dir)
     elif transport == "curl":
         with start_temp_server(serve_dir=backup_dir, recv_dir=backup_dir,
-                               local_ip=local_ip, allow_ip=ROUTER_IP) as srv:
+                               local_ip=local_ip, allow_ip=NET.router_ip) as srv:
             print(f"[*] 主机临时 HTTP 服务器: http://{local_ip}:{srv.port}")
             ok, _ = probe_host_reachable(tn, local_ip, srv.port)
             if not ok:
@@ -2933,7 +2879,7 @@ def backup_all_partitions(tn, local_ip, backup_dir, transport=None):
             for i, name in pairs:
                 _backup_one_curl(tn, i, name, local_ip, backup_dir, srv.port)
     else:
-        with _TftpReceiver(recv_dir=backup_dir, allow_ip=ROUTER_IP,
+        with _TftpReceiver(recv_dir=backup_dir, allow_ip=NET.router_ip,
                            port=LOCAL_TFTP_PORT) as srv:
             print(f"[*] 主机临时 TFTP 服务器: {local_ip}:{srv.port}（udp）")
             print("[*] 开始备份所有 MTD 分区（使用 dd + tftp 上传）...")
@@ -2990,7 +2936,7 @@ def _maybe_build_factory_1m(backup_dir):
     生成失败不影响备份本身（备份已经落盘），只打印警告 —— 用户可以
     之后用 fiberhome-factory 图形工具手工生成。
     """
-    if MODEL_FAMILY != "fh":
+    if PROFILE.family != "fh":
         return
     src = _find_factory_partition(backup_dir)
     if not src:
@@ -3136,7 +3082,7 @@ def flash_uboot(tn, local_ip, model_name="", part_number=""):
 
     uboot_size = os.path.getsize(UBOOT_FILE)
     with start_temp_server(serve_dir=".", recv_dir=".", local_ip=local_ip,
-                           allow_ip=ROUTER_IP) as srv:
+                           allow_ip=NET.router_ip) as srv:
         print(f"[*] 主机临时 HTTP 服务器: http://{local_ip}:{srv.port}")
         ok, _ = probe_host_reachable(tn, local_ip, srv.port)
         if not ok:
@@ -3331,12 +3277,12 @@ def run_stock2ubi(tn, local_ip, filepath, ignore_kernel=False,
     # 否则 wget 报 `can't open '...': Text file busy`（实测踩过）。
     # 之前 killall 放在 chmod 之后，用户重复点按钮就必然失败。
     run_cmd(tn, "killall an758x-stock2ubi 2>/dev/null; echo KILLED", timeout=30)
-    if is_port_open(ROUTER_IP, STOCK2UBI_PORT, timeout=2):
+    if is_port_open(NET.router_ip, STOCK2UBI_PORT, timeout=2):
         # 还没退干净：等它把 3333 让出来（最多 10 秒），否则新实例绑不上
         print(f"[*] 旧实例仍在占用 {STOCK2UBI_PORT}，等待退出...")
         deadline = time.time() + 10
         while time.time() < deadline and is_port_open(
-                ROUTER_IP, STOCK2UBI_PORT, timeout=2):
+                NET.router_ip, STOCK2UBI_PORT, timeout=2):
             time.sleep(1)
 
     # --- 1. 上传到 /tmp（curl 或 wget，见 device_download）---
@@ -3344,7 +3290,7 @@ def run_stock2ubi(tn, local_ip, filepath, ignore_kernel=False,
     # 不会碰旧 inode，所以不会被 Text file busy 拦住。
     dl_tmp = STOCK2UBI_REMOTE + ".new"
     with start_temp_server(serve_dir=fdir, recv_dir=".", local_ip=local_ip,
-                           allow_ip=ROUTER_IP) as srv:
+                           allow_ip=NET.router_ip) as srv:
         print(f"[*] 主机临时 HTTP 服务器: http://{local_ip}:{srv.port}")
         ok, _ = probe_host_reachable(tn, local_ip, srv.port)
         if not ok:
@@ -3400,7 +3346,7 @@ def run_stock2ubi(tn, local_ip, filepath, ignore_kernel=False,
     deadline = time.time() + STOCK2UBI_WAIT
     ready = False
     while time.time() < deadline:
-        if is_port_open(ROUTER_IP, STOCK2UBI_PORT, timeout=3):
+        if is_port_open(NET.router_ip, STOCK2UBI_PORT, timeout=3):
             ready = True
             break
         time.sleep(2)
@@ -3419,7 +3365,7 @@ def run_stock2ubi(tn, local_ip, filepath, ignore_kernel=False,
         print(f"[!] 也可以 telnet 上去手动看日志: tail -n 50 {log}")
         sys.exit(1)
 
-    url = f"http://{ROUTER_IP}:{STOCK2UBI_PORT}/"
+    url = f"http://{NET.router_ip}:{STOCK2UBI_PORT}/"
     print(f"\n[✓] an758x-stock2ubi 已在设备后台运行。")
     print(f"    打开 {url} 继续（分区备份由本工具另外完成，不用在网页里点下载）：")
     print(f"    ① 刷写 BL2      —— 上传 preloader.bin（不要用 firstblock.bin）")
@@ -3465,6 +3411,13 @@ def run_flow(args, confirm_flash=None):
     confirm_flash: 可调用对象，返回 True 表示用户确认刷写。为 None 时走
     命令行 input()；GUI 传入对话框回调。
     """
+    # 机型档案 + 界面/config 的凭据：**唯一入口**，就放在最前面。
+    # 少了这一步，贝尔机型会拿着空的机型账号去「探测 + 逐个试」那条路，
+    # 用户填的铭牌密码也永远不会生效（2026-10 报障，见 HANDOFF）。
+    # CLI 已经在 main() 里灌过机型了，这里 model_key=None 时不会动它。
+    device_mod.configure_device(
+        args.get("model"), args.get("creds"),
+        log=print if (args.get("model") or args.get("creds")) else None)
     mode = args["mode"]
     # === TTL + XMODEM 救砖：完全不碰网络，只驱动串口 ===
     #
@@ -3540,7 +3493,7 @@ def run_flow(args, confirm_flash=None):
     use_serial = bool(args.get("serial_port"))
     local_ip = None
     if mode in ("backup", "flash", "stock2ubi") and not use_serial:
-        local_ip = get_local_ip(ROUTER_IP)
+        local_ip = get_local_ip(NET.router_ip)
         # 如果你使用WSL2请使用本地IP地址，WSL内运行可能无法正确获得本地IP。
         # local_ip = STATIC_LOCAL_IP
         print(f"[*] 本机 IP: {local_ip}")
@@ -3562,7 +3515,7 @@ def run_flow(args, confirm_flash=None):
             sys.exit(1)
         if mode in ("backup", "flash", "stock2ubi"):
             # 串口回传分区仍需要一个主机 HTTP 服务，所以要本机 IP。
-            local_ip = local_ip or get_local_ip(ROUTER_IP)
+            local_ip = local_ip or get_local_ip(NET.router_ip)
             print(f"[*] 本机 IP: {local_ip}（设备通过它回传分区）")
 
     # === 3. 自动开启 Telnet（免拆机） ===
@@ -3572,9 +3525,9 @@ def run_flow(args, confirm_flash=None):
     elif mode == "ftp":
         print("[*] 模式 ftp：只开 FTP，跳过 Telnet 步骤。")
     elif args["enable_telnet"]:
-        if TELNET_ENABLE_MODE == "fhtool":
-            enable_telnet_via_fhtool(MODEL_MAC)
-        elif SUPPORTS_WEB_TELNET:
+        if PROFILE.telnet_enable == "fhtool":
+            enable_telnet_via_fhtool(MAC.value)
+        elif PROFILE.supports_web_telnet:
             enable_telnet_via_web()
         else:
             print("[*] 本机型没有可用的自动开启 Telnet 方式，跳过该步骤；"
@@ -3591,7 +3544,7 @@ def run_flow(args, confirm_flash=None):
         print("[*] TTL 模式：跳过开启 FTP 步骤（串口直接是 root）。")
     elif mode == "telnet":
         print("[*] 模式 telnet：只开 Telnet，跳过 FTP 步骤。")
-    elif not NEED_FTP_FOR_SU:
+    elif not PROFILE.need_ftp_for_su:
         print("[*] 本机型提权不需要 FTP，跳过 FTP 步骤。")
     elif args["enable_ftp"]:
         enable_ftp_via_web()
@@ -3855,70 +3808,16 @@ def run_flow(args, confirm_flash=None):
         print(f"   - 完整备份位于: {backup_dir_used}")
 
 
-def _load_model_globals(model_key=None):
-    """按机型把固定值写进本模块的全局变量。
-
-    命令行跑 flash.py 时没有 config.ini 参与，所以这里直接读机型档案：
-    端口、超级账号、telnet 账号、su 账号、功能开关全部以机型为准。
-    密码类的（telnet/su）仍需用户提供或由 MAC 推导，见 --model 的说明。
-    """
-    global MODEL, WEB_PORT, NEED_FTP_FOR_SU, SUPPORTS_WEB_TELNET
-    global SUPPORTS_STOCK2UBI, SUPPORTS_UBOOT_FLASH
-    global MODEL_TELNET_USER, MODEL_SU_USER, SUPER_USER, SUPER_PASSWORD
-    global TELNET_PORT, TELNET_ENABLE_MODE, BACKUP_TRANSPORT
-    global MODEL_PASSWORD, MODEL_PASSWORD_PREFIX
-    global MODEL_TELNET_PASSWORD_FROM_MAC, MODEL_SU_PASSWORD
-    global MODEL_SU_PASSWORD_PREFIX, TELNET_PASSWORD_TRY_MAC_SUFFIX
-    global MODEL_FAMILY
-    try:
-        import models as models_mod
-    except Exception:
-        return None                      # 没有 models.py 就沿用配置区默认值
-    m = models_mod.get(model_key or models_mod.DEFAULT_MODEL)
-    MODEL = m
-    WEB_PORT = m.web_port
-    NEED_FTP_FOR_SU = m.need_ftp_for_su
-    SUPPORTS_WEB_TELNET = m.supports_web_telnet
-    SUPPORTS_STOCK2UBI = m.supports_stock2ubi
-    SUPPORTS_UBOOT_FLASH = m.supports_uboot_flash
-    MODEL_TELNET_USER = m.telnet_user
-    MODEL_SU_USER = m.su_user
-    TELNET_PORT = m.telnet_port
-    TELNET_ENABLE_MODE = m.telnet_enable
-    BACKUP_TRANSPORT = m.backup_transport
-    MODEL_PASSWORD = m.telnet_password
-    MODEL_PASSWORD_PREFIX = m.telnet_password_prefix
-    MODEL_TELNET_PASSWORD_FROM_MAC = m.telnet_password_from_mac
-    TELNET_PASSWORD_TRY_MAC_SUFFIX = m.telnet_password_try_mac_suffix
-    MODEL_FAMILY = getattr(m, "family", "bel")
-    MODEL_SU_PASSWORD = m.su_password
-    MODEL_SU_PASSWORD_PREFIX = m.su_password_prefix
-    if m.super_user:
-        SUPER_USER = m.super_user
-    if m.super_password:
-        SUPER_PASSWORD = m.super_password
-    # 机型自带固定密码时，让它成为首选密码（覆盖配置区里另一机型的默认值）。
-    # 否则从贝尔切到烽火时，会先拿贝尔的 j3ba73@8 去试烽火，白白烧掉
-    # 一次认证机会（3 次就锁 300 秒）。
-    global PASSWORD, ROOT_PASSWORD
-    if m.telnet_password:
-        PASSWORD = m.telnet_password
-    if m.su_password:
-        ROOT_PASSWORD = m.su_password
-    elif m.su_password_from_mac:
-        ROOT_PASSWORD = ""               # 由 MAC 推导，见 _su_password_candidates
-    return m
-
-
 def main():
     current_dir = os.path.dirname(os.path.abspath(__file__))
     os.chdir(current_dir)
     args = parse_args(sys.argv[1:])
-    m = _load_model_globals(args.get("model"))
-    if m is not None:
-        print(f"[*] 机型: {m.name}")
-        if m.key == "bel" and args.get("model"):
-            pass
+    # 机型档案（网页端口 / 超级账号 / telnet 与 su 账号…）现在都在 device.py 里，
+    # 灌值的唯一入口是 device.configure_device()。命令行没有界面，所以凭据
+    # 只认机型值（用户手填的走 --model + config.ini，见 gui.py）。
+    prof = device_mod.configure_device(args.get("model"))
+    if prof.model is not None:
+        print(f"[*] 机型: {prof.model.name}")
     run_flow(args)
 
 

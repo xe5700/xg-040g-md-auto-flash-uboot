@@ -191,30 +191,41 @@ def get_bool(cfg, section, key, fallback=False):
 
 
 def apply_to_flash(cfg, flash):
-    """把配置写进 flash 模块的全局变量。
+    """把 config.ini 里的 [device] / [telnet] / [super] 写进运行时状态。
+
+    2026-10 重构后分两处写：
+      - 光猫地址、telnet / 网页凭据 → `device.py` 的对象（`NET`/`TELNET`/`WEB`）；
+      - 自动开关、回读校验、串口、自动重启、临时 HTTP 端口等**程序行为参数**
+        → 仍然覆盖 flash 模块的常量（命令行以这些常量为准）。
 
     flash.py 的配置区是模块级常量，GUI 不复制它的逻辑，只覆盖这些变量，
     这样命令行和 GUI 走的是同一份实现。
     """
-    flash.ROUTER_IP = cfg.get("device", "router_ip")
+    import device as device_mod
+    # ---- 程序行为参数（仍是 flash 模块常量）----
     flash.AUTO_ENABLE_TELNET = get_bool(cfg, "device", "auto_enable_telnet", True)
     flash.AUTO_ENABLE_FTP = get_bool(cfg, "device", "auto_enable_ftp", True)
     flash.SKIP_BACKUP_IF_COMPLETE = get_bool(
         cfg, "device", "skip_backup_if_complete", True)
 
-    flash.USERNAME = cfg.get("telnet", "username")
-    flash.PASSWORD = cfg.get("telnet", "password")
-    flash.SU_USER = cfg.get("telnet", "su_user")
+    # ---- 机型 / 凭据（device.py）----
+    # 只传非空的：configure_device 里空值一律忽略，落到机型档案的默认值。
     root_pwd = cfg.get("telnet", "root_password").strip()
-    # 留空即沿用 telnet 密码（本机型实测 su user_ftp 的密码就是 telnet 密码）
-    flash.ROOT_PASSWORD = root_pwd if root_pwd else flash.PASSWORD
+    device_mod.configure_device(None, overrides={
+        "router_ip": cfg.get("device", "router_ip", fallback="").strip(),
+        "telnet_username": cfg.get("telnet", "username", fallback="").strip(),
+        "telnet_password": cfg.get("telnet", "password", fallback="").strip(),
+        "su_user": cfg.get("telnet", "su_user", fallback="").strip(),
+        # 留空即沿用 telnet 密码（本机型实测 su user_ftp 的密码就是 telnet 密码）
+        "su_password": root_pwd,
+        "super_username": cfg.get("super", "username", fallback="").strip(),
+        "super_password": cfg.get("super", "password", fallback="").strip(),
+        "mac": cfg.get("device", "mac", fallback="").strip(),
+    })
     # 贝尔 tab 没有「手动指定密码」框，这里清空，避免烽火 tab 填的值串过来
-    # （两个 tab 共用同一个 flash 模块，切 tab 后 _load_flash 会重新走这里）
-    flash.MANUAL_TELNET_PASSWORD = ""
-    flash.MANUAL_SU_PASSWORD = ""
-
-    flash.SUPER_USER = cfg.get("super", "username")
-    flash.SUPER_PASSWORD = cfg.get("super", "password")
+    # （两个 tab 共用同一份 device 状态，切 tab 后 _load_flash 会重新走这里）
+    device_mod.TELNET.manual_password = ""
+    device_mod.TELNET.manual_su_password = ""
 
     # 回读校验的轮询参数（写 mtdblock 后数据生效有延迟，见 flash.verify_mtd_hash）
     try:
@@ -247,92 +258,60 @@ def apply_to_flash(cfg, flash):
 
 
 def apply_model(cfg, flash, model=None):
-    """按机型把默认值填进 flash 模块，再用 config.ini 里的用户值覆盖。
+    """按机型把默认值填进 device 的机型档案（再用 config.ini 里的用户值覆盖）。
 
     为什么需要这一步：`config.ini` 里存的账号密码是**上次选中的机型**的。
     切换机型时如果直接沿用，就会拿贝尔的 `user`/`j3ba73@8` 去登烽火，
     白耗认证机会甚至触发锁定。所以切换机型时应该先用机型默认值打底。
 
+    2026-10 重构：机型档案的归属地是 `device.py`（`configure_device()`），
+    这里**不再往 flash 模块挂属性** —— 那些 `flash.MODEL_*` 赋值重构后是死代码
+    （写上去也没人读，只会让人以为它还在生效）。`flash` 参数保留是为了不改调用方。
     model 为 None 时读 cfg 里的 [device] model。
     """
+    import device as device_mod
     import models as models_mod
     m = model or models_mod.get(cfg.get("device", "model", fallback=""))
-    flash.MODEL = m
-    # 机型层面的固定值（地址/端口/账号）先写进去，用户配置随后覆盖
-    if not cfg.get("device", "router_ip", fallback="").strip():
-        flash.ROUTER_IP = m.router_ip
-    flash.WEB_PORT = m.web_port
-    flash.MODEL_TELNET_USER = m.telnet_user
-    flash.MODEL_SU_USER = m.su_user
-    flash.NEED_FTP_FOR_SU = m.need_ftp_for_su
-    flash.SUPPORTS_WEB_TELNET = m.supports_web_telnet
-    flash.SUPPORTS_STOCK2UBI = m.supports_stock2ubi
-    flash.SUPPORTS_UBOOT_FLASH = m.supports_uboot_flash
-    flash.TELNET_ENABLE_MODE = m.telnet_enable
-    # 备份通道也要按机型重置。漏了这一行会出现：逛过烽火 tab 再回贝尔，
-    # BACKUP_TRANSPORT 还留着 "stock2ubi"，于是贝尔备份去连 3333 端口，
-    # 而贝尔设备上根本没有 an758x-stock2ubi 在跑，备份必然失败。
-    flash.BACKUP_TRANSPORT = m.backup_transport
-    flash.MODEL_MAC = cfg.get("device", "mac", fallback="").strip()
-    # 试「固定值+MAC后6位」这种流传写法（烽火 True，贝尔 False）
-    flash.TELNET_PASSWORD_TRY_MAC_SUFFIX = m.telnet_password_try_mac_suffix
-    flash.MODEL_PASSWORD = m.telnet_password
-    flash.MODEL_PASSWORD_PREFIX = m.telnet_password_prefix
-    flash.MODEL_TELNET_PASSWORD_FROM_MAC = m.telnet_password_from_mac
-    flash.MODEL_SU_PASSWORD = m.su_password
-    flash.MODEL_SU_PASSWORD_PREFIX = m.su_password_prefix
-    flash.MODEL_FAMILY = getattr(m, "family", "bel")
+    # 只传非空的：configure_device 里空值一律忽略，所以 [device] 留空时
+    # 会自然落到机型档案的默认值（地址/端口/账号）。
+    device_mod.configure_device(m.key, overrides={
+        "router_ip": cfg.get("device", "router_ip", fallback="").strip(),
+        "mac": cfg.get("device", "mac", fallback="").strip(),
+    })
     return m
 
 
 def apply_fh_to_flash(cfg, flash):
-    """把烽火 tab 的配置写进 flash 模块（与贝尔那套完全独立）。
+    """把烽火 tab 的配置写进运行时状态（与贝尔那套完全独立）。
 
     与 apply_model/apply_to_flash 的区别：那两套按「机型档案」推默认值，
     适合贝尔那种「一个机型一套固定账号」；烽火这边用户可能同时装了多个
     AN7581 机型（HG5585F、HG5382A……），账号密码是用户填的，所以直接
     以 config.ini 的 [fh] 段为准，只在留空时才用机型档案兜底。
+
+    2026-10 重构：机型/凭据都进 `device.py`，这里不再往 flash 模块挂属性。
     """
+    import device as device_mod
     import models as models_mod
     m = models_mod.get("hg5585f")
-    flash.MODEL = m
-    flash.ROUTER_IP = cfg.get("fh", "router_ip", fallback="").strip() or m.router_ip
-    flash.WEB_PORT = m.web_port
-    flash.TELNET_PORT = m.telnet_port
-    flash.MODEL_TELNET_USER = m.telnet_user
-    flash.MODEL_SU_USER = m.su_user
-    flash.NEED_FTP_FOR_SU = m.need_ftp_for_su
-    flash.SUPPORTS_WEB_TELNET = m.supports_web_telnet
-    flash.SUPPORTS_STOCK2UBI = m.supports_stock2ubi
-    flash.SUPPORTS_UBOOT_FLASH = m.supports_uboot_flash
-    flash.TELNET_ENABLE_MODE = m.telnet_enable
-    flash.BACKUP_TRANSPORT = m.backup_transport
-    flash.MODEL_MAC = cfg.get("fh", "mac", fallback="").strip()
-    flash.MODEL_PASSWORD = m.telnet_password
-    flash.MODEL_PASSWORD_PREFIX = m.telnet_password_prefix
-    flash.MODEL_TELNET_PASSWORD_FROM_MAC = m.telnet_password_from_mac
-    flash.TELNET_PASSWORD_TRY_MAC_SUFFIX = m.telnet_password_try_mac_suffix
-    flash.MODEL_SU_PASSWORD = m.su_password
-    flash.MODEL_SU_PASSWORD_PREFIX = m.su_password_prefix
-    # 用户手填的密码：优先级高于机型档案推导值（见 flash._password_candidates）。
-    # 留空就是空串，不会参与候选去重，所以不影响默认行为。
-    flash.MANUAL_TELNET_PASSWORD = cfg.get("fh", "telnet_password", fallback="").strip()
-    flash.MANUAL_SU_PASSWORD = cfg.get("fh", "su_password", fallback="").strip()
-    # telnet 密码：固定值 FH-nE7jA%5m（固件里解出来的），用户在 [fh] 里
-    # 没有单独的 telnet 密码键 —— 这是刻意的，避免用户填错反而登录不上。
-    flash.USERNAME = m.telnet_user
-    flash.PASSWORD = m.telnet_password
-    flash.SU_USER = m.su_user
-    flash.ROOT_PASSWORD = ""            # 由 MAC 推导，见 _su_password_candidates
-    flash.SUPER_USER = (cfg.get("fh", "super_username", fallback="").strip()
-                        or m.super_user)
-    flash.SUPER_PASSWORD = (cfg.get("fh", "super_password", fallback="").strip()
-                            or m.super_password)
+    # 只传非空的：configure_device 里空值一律忽略，于是「选填」留空时
+    # 仍然落到机型档案的推导值（FH-nE7jA%5m / Fh@+MAC 后 6 位）。
+    device_mod.configure_device("hg5585f", overrides={
+        "router_ip": cfg.get("fh", "router_ip", fallback="").strip(),
+        "mac": cfg.get("fh", "mac", fallback="").strip(),
+        # 用户手填的密码：优先级高于机型档案推导值（见 flash._password_candidates）。
+        # 留空就是空串，不参与候选，所以不影响默认行为。
+        "manual_password": cfg.get("fh", "telnet_password", fallback="").strip(),
+        "manual_su_password": cfg.get("fh", "su_password", fallback="").strip(),
+        "super_username": cfg.get("fh", "super_username", fallback="").strip(),
+        "super_password": cfg.get("fh", "super_password", fallback="").strip(),
+    })
+    # telnet 密码是固定值 FH-nE7jA%5m（固件里解出来的），[fh] 里刻意**没有**
+    # 「telnet 密码」这个键 —— 避免用户填错反而登录不上；要手填就走「选填」那条。
     # 烽火不刷 tcboot，备份/刷写合并成 stock2ubi 一步，这两个开关无所谓，
-    # 但保持与贝尔一致，避免 run_flow 里读到旧值
+    # 但保持与贝尔一致，避免 run_flow 里读到旧值。
     flash.AUTO_ENABLE_TELNET = True
     flash.AUTO_ENABLE_FTP = False
-    flash.MODEL_FAMILY = getattr(m, "family", "bel")
     return m
 
 

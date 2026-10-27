@@ -506,18 +506,6 @@ class App:
             row1, text="重启光猫", width=12, command=self.on_reboot)
         self.btn_reboot.pack(side="left", padx=6)
 
-        row2 = ttk.Frame(ops)
-        row2.pack(fill="x", pady=(8, 0))
-        self.btn_stock2ubi = ttk.Button(
-            row2, text="④ 运行 stock2ubi 刷 U-Boot", width=26,
-            command=self.on_stock2ubi)
-        self.btn_stock2ubi.pack(side="left")
-        ttk.Label(row2, text="文件：").pack(side="left", padx=(10, 0))
-        self.stock2ubi_var = tk.StringVar(value="an758x-stock2ubi")
-        ttk.Entry(row2, textvariable=self.stock2ubi_var, width=22).pack(side="left")
-        ttk.Label(row2, text="（放在程序同目录）", foreground="#666").pack(
-            side="left", padx=(4, 0))
-
         self.hint_labels["ops_hint"] = ttk.Label(
             ops, foreground="#666",
             text="提示：备份需要 root，程序会自动开启 Telnet 与 FTP；"
@@ -550,17 +538,32 @@ class App:
             "https://github.com/Loong1996/ImmortalWrt-Airoha/releases"
         ).pack(side="left")
 
-        # ===== 刷机（tcboot.bin 写 mtd0，只对贝尔移动版有效）=====
+        # ===== 刷机（两条路：方式 1 写 mtd0；方式 2 走 stock2ubi 网页）=====
         flashbox = ttk.LabelFrame(
-            outer, text="刷机（危险 · tcboot.bin 写 mtd0，仅贝尔移动版适用）",
-            padding=8)
+            outer, text="刷机（危险 · 只对贝尔移动版适用）", padding=8)
         flashbox.pack(fill="x", pady=(8, 0))
+
+        # 用户 m03208：tcboot 和 stock2ubi 是两条不同的路子，**只需要用一种**；
+        # 方式 2 放到刷机区里面，而且不需要勾上面那个确认框（它有自己的一次确认弹窗）。
+        tk.Label(
+            flashbox, justify="left", anchor="w", wraplength=880,
+            text="刷 U-Boot 有下面两种方式，只需要用一种，不要两个都点。\n"
+                 "方式 1 用 tcboot.bin 直接写闪存（要勾下面的确认框）；"
+                 "方式 2 把 an758x-stock2ubi 传到光猫上，在它的网页里备份并刷写"
+                 "（不用勾确认框）。两种方式的效果一样。"
+        ).pack(fill="x")
+
+        # ---- 方式 1：tcboot.bin 写 mtd0 ----
+        ttk.Label(
+            flashbox, font=("", 9, "bold"),
+            text="方式 1 · tcboot.bin 直接写 mtd0（需要勾下面的确认框，仅贝尔移动版）"
+        ).pack(anchor="w", pady=(10, 0))
 
         self.allow_flash = tk.BooleanVar(value=False)
         self.flash_check = ttk.Checkbutton(
             flashbox, text="我了解风险，启用刷机功能",
             variable=self.allow_flash, command=self.on_toggle_flash)
-        self.flash_check.pack(anchor="w")
+        self.flash_check.pack(anchor="w", pady=(2, 0))
 
         fr = ttk.Frame(flashbox)
         fr.pack(fill="x", pady=(6, 0))
@@ -572,9 +575,35 @@ class App:
             side="left", padx=(4, 0))
 
         self.btn_flash = ttk.Button(
-            flashbox, text="刷写 U-Boot", width=18, command=self.on_flash,
-            state="disabled")
+            flashbox, text="方式 1：刷写 U-Boot（tcboot.bin）", width=30,
+            command=self.on_flash, state="disabled")
         self.btn_flash.pack(anchor="w", pady=(8, 0))
+
+        # ---- 方式 2：stock2ubi 网页（不需要上面那个确认框）----
+        ttk.Separator(flashbox, orient="horizontal").pack(fill="x", pady=(10, 0))
+        ttk.Label(
+            flashbox, font=("", 9, "bold"),
+            text="方式 2 · 运行 an758x-stock2ubi，在它的网页里备份并刷 U-Boot"
+        ).pack(anchor="w", pady=(8, 0))
+
+        row2 = ttk.Frame(flashbox)
+        row2.pack(fill="x", pady=(4, 0))
+        self.btn_stock2ubi = ttk.Button(
+            row2, text="方式 2：运行 stock2ubi 刷 U-Boot", width=30,
+            command=self.on_stock2ubi)
+        self.btn_stock2ubi.pack(side="left")
+        ttk.Label(row2, text="文件：").pack(side="left", padx=(10, 0))
+        self.stock2ubi_var = tk.StringVar(value="an758x-stock2ubi")
+        ttk.Entry(row2, textvariable=self.stock2ubi_var, width=22).pack(side="left")
+        ttk.Label(row2, text="（放在程序同目录）", foreground="#666").pack(
+            side="left", padx=(4, 0))
+
+        ttk.Label(
+            flashbox, foreground="#666", justify="left", wraplength=880,
+            text="这条不用勾上面的确认框：点下去之后由程序上传并启动网页工具，"
+                 "备份和刷写在它的网页里完成（备份文件仍然由本工具下载到 "
+                 "backup_日期_时间/ 并校验 SHA256）。两种方式只需要用一种。"
+        ).pack(anchor="w", pady=(4, 0))
 
         # telnet 登录失败后自动重启：认证失败有阈值（贝尔实测 3 次锁 300 秒），
         # 触发后只能等或重启。重启 1~3 分钟，比干等 5 分钟更可控，所以默认开。
@@ -1459,6 +1488,57 @@ class App:
             cfgmod.apply_to_flash(self.cfg, self.flash)
         return self.flash
 
+    # ---------- 机型 + 凭据：交给 flash.run_flow ----------
+    def _creds_from_ui(self):
+        """把界面上的机型/凭据整理成 flash.py 能直接用的字典。
+
+        键名与 device.configure_device(overrides=...) 一一对应；**空值一律不传**，
+        flash.py 那边会保留机型档案的值（比如烽火没填 telnet 密码时，仍然用
+        models.py 里的 FH-nE7jA%5m / Fh@+MAC，不会被空串覆盖掉）。
+
+        为什么必须传：flash.py 以前靠 _load_model_globals() 一条条 global 赋值，
+        而 GUI 走的是 run_flow()，那条路从来不灌 —— 贝尔机型于是拿着空的机型账号
+        去「从登录页探测 + 逐个试 user/useradmin」，用户在界面填的铭牌密码也从来
+        没生效（2026-10 报障）。现在统一走 args["model"] + args["creds"]。
+        """
+        def val(section, key):
+            var = self.vars.get((section, key))
+            return var.get().strip() if var is not None else ""
+
+        creds = {
+            "router_ip": val("device", "router_ip") or val("fh", "router_ip"),
+            "mac": val("fh", "mac"),
+            "super_username": val("super", "username") or val("fh", "super_username"),
+            "super_password": val("super", "password") or val("fh", "super_password"),
+        }
+        if self.model.key == "hg5585f":
+            # 烽火这两个框是「选填 · 手动指定」：填了就排到候选最前面
+            # （TELNET.manual_password / manual_su_password，永远不被机型覆盖）。
+            creds["manual_password"] = val("fh", "telnet_password")
+            creds["manual_su_password"] = val("fh", "su_password")
+        else:
+            creds.update({
+                "telnet_username": val("telnet", "username"),
+                "telnet_password": val("telnet", "password"),
+                "su_user": val("telnet", "su_user"),
+                "su_password": val("telnet", "root_password"),
+            })
+        return creds
+
+    def _device_args(self):
+        """机型 key + 界面凭据（每个 run_flow 调用都必须带上）。"""
+        return {"model": self.model.key, "creds": self._creds_from_ui()}
+
+    def _run_flash(self, flash, args):
+        """唯一的 flash.run_flow 入口：自动补上机型 + 凭据。
+
+        所有刷机/备份/开 telnet 的按钮都从这里发起，避免以后有人新加一个按钮
+        又忘了传机型（那就是这次报障的成因）。
+        """
+        merged = dict(args)
+        merged.update(self._device_args())
+        self._start_worker(flash.run_flow, merged)
+
     def _prepare(self):
         """保存配置 + 校验机型必需的字段 + 加载 flash 模块。
 
@@ -1558,7 +1638,7 @@ class App:
         via = "（TTL 串口）" if serial else ""
         self.log_line(f"\n{'=' * 56}\n[*] 开始：{label}{via}"
                       f"（机型：{self.model.short}）\n{'=' * 56}\n")
-        self._start_worker(flash.run_flow, args)
+        self._run_flash(flash, args)
 
     def run_fh_mode(self, mode):
         """烽火 tab 的操作：目前只有「开启 Telnet」。
@@ -1576,7 +1656,7 @@ class App:
         label = {"telnet": "开启 Telnet"}.get(mode, mode)
         self.log_line(f"\n{'=' * 56}\n[*] 开始：{label}"
                       f"（机型：{self.model.short}）\n{'=' * 56}\n")
-        self._start_worker(flash.run_flow, args)
+        self._run_flash(flash, args)
 
     def on_reboot(self):
         if not messagebox.askyesno(
@@ -1593,7 +1673,7 @@ class App:
         args.update(self._serial_args() or {})
         self.log_line(f"\n{'=' * 56}\n[*] 开始：重启光猫"
                       f"（机型：{self.model.short}）\n{'=' * 56}\n")
-        self._start_worker(flash.run_flow, args)
+        self._run_flash(flash, args)
 
     def on_toggle_flash(self):
         # 机型不支持刷 tcboot（烽火）时，勾选也不给解锁
@@ -1720,7 +1800,7 @@ class App:
         args.update(serial)
         via = "（TTL 串口）" if serial else ""
         self.log_line(f"\n{'=' * 56}\n[!] 开始刷写 U-Boot：{uboot}{via}\n{'=' * 56}\n")
-        self._start_worker(flash.run_flow, args)
+        self._run_flash(flash, args)
 
     def _stock2ubi_args(self, name, flash):
         # force_backup=False：让 flash.py 先找「同一台设备且校验完整」的旧备份，
@@ -1728,7 +1808,7 @@ class App:
         # no_browser=False：备份做完后由 flash.py 打开 stock2ubi 网页。
         return {"mode": "stock2ubi",
                 "enable_telnet": True,
-                "enable_ftp": bool(flash.NEED_FTP_FOR_SU),
+                "enable_ftp": bool(self.model.need_ftp_for_su),
                 "yes": False, "reboot": False, "force_backup": False,
                 "stock2ubi_file": name,
                 "stock2ubi_ignore_kernel": False,
@@ -1757,6 +1837,8 @@ class App:
         if not messagebox.askyesno(
                 APP_TITLE,
                 "即将上传并在光猫后台运行 an758x-stock2ubi\n\n"
+                "（这是「方式 2」：不用勾上面那个「我了解风险，启用刷机功能」，\n"
+                "  方式 1 和方式 2 只需要用一种。）\n\n"
                 f"文件：{name}（{os.path.getsize(path)} 字节）\n"
                 f"运行位置：光猫 /tmp，监听端口 {flash.STOCK2UBI_PORT}\n\n"
                 "启动后本工具会先把全部分区自动备份下来（带 SHA256 清单，\n"
@@ -1785,7 +1867,7 @@ class App:
         self.log_line(f"\n{'=' * 56}\n"
                       f"[*] 开始：运行 an758x-stock2ubi（{name}）\n"
                       f"{'=' * 56}\n")
-        self._start_worker(flash.run_flow, args)
+        self._run_flash(flash, args)
 
     def on_fh_stock2ubi(self):
         """烽火 tab：备份 + 刷 U-Boot 合并为一步（全部走 stock2ubi 网页）。
@@ -1849,7 +1931,7 @@ class App:
         self.log_line(f"\n{'=' * 56}\n"
                       f"[*] 开始：烽火 备份 + 刷 U-Boot（{name}）\n"
                       f"{'=' * 56}\n")
-        self._start_worker(flash.run_flow, args)
+        self._run_flash(flash, args)
 
     def on_fh_report(self):
         """烽火 tab：把设备上和密码相关的文件打包成诊断 zip，交给作者分析。

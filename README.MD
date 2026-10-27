@@ -49,13 +49,17 @@ tab 各有各的表单、提示和按钮，互不影响，配置也分开存（�
    全部存在同目录的 `config.ini` 里，改完点「保存配置」。
    改铭牌账号时，提权账号会跟着变成「账号_ftp」（例如 `user` → `user_ftp`）；
    手工改过提权账号后程序就不再自动覆盖它。
-3. **操作**——`① 开启 Telnet`、`② 开启 FTP`、`③ 备份全部分区`、
-   `④ 运行 stock2ubi 刷 U-Boot`、`重启光猫`。除第 ④ 个会把一个工具传到
-   光猫后台运行外，其余都是只读的，不写入设备任何分区。
+3. **操作**——`① 开启 Telnet`、`② 开启 FTP`、`③ 备份全部分区`、`重启光猫`，
+   都是只读的，不写入设备任何分区。
    Telnet 和 FTP 是两个**独立**按钮：你自己开过 Telnet 但没开 FTP 时，
    只点 ② 就行，程序不会因为 Telnet 已开而跳过 FTP。
-4. **刷机**——`tcboot.bin` 写 mtd0，默认**锁定**，必须先勾选
-   「我了解风险，启用刷机功能」。只对贝尔移动版有效。
+4. **刷机**——里面是**两种刷 U-Boot 的方式，只需要用一种**（别两个都点）：
+   - **方式 1**：用 `tcboot.bin` 直接写 mtd0，默认**锁定**，必须先勾选
+     「我了解风险，启用刷机功能」；
+   - **方式 2**：把 `an758x-stock2ubi` 传到光猫上跑起来，备份和刷写都在它的
+     网页里完成。**这条不需要勾上面的确认框**（它自己有确认弹窗）。
+
+   两条路只对贝尔移动版有效，效果一样。
 5. **运行日志**——和命令行输出完全一样（GUI 直接接管了 `print`）。
 
 ### 烽火 HG5585F 电信版 tab
@@ -352,8 +356,10 @@ python3 flash.py --model hg5585f  --mode backup   # 烽火 HG5585F CT
 
 图形界面里对应这些按钮（在各自的 tab 里）：
 
-- **贝尔 tab**：`① 开启 Telnet`、`② 开启 FTP`、`③ 备份全部分区`、
-  `④ 运行 stock2ubi 刷 U-Boot`、`重启光猫`，外加默认锁定的「刷写 U-Boot」；
+- **贝尔 tab**：操作区是 `① 开启 Telnet`、`② 开启 FTP`、`③ 备份全部分区`、
+  `重启光猫`；刷机区是 `方式 1：刷写 U-Boot（tcboot.bin）`（默认锁定，要勾
+  「我了解风险」）和 `方式 2：运行 stock2ubi 刷 U-Boot`（不用勾，两种方式
+  只用一种）；
 - **烽火 tab**：`① 开启 Telnet`、`② 备份并刷 U-Boot（stock2ubi）`、`重启光猫`、
   `导出诊断包`。
 - **TTL / XMODEM 救砖 tab**：`刷入 U-Boot（bl31 + u-boot.fip）`、
@@ -667,14 +673,15 @@ BootROM / U-Boot，根本进不了系统，老功能一个字节都帮不上。�
    - 重要项：`PASSWORD`（telnet 密码，通常印在光猫**底部铭牌**上）、
      `SU_USER`（提权账号，本机型为 `user_ftp`）、`MODE`（默认运行模式）
    - 本机型实测：`PASSWORD = "j3ba73@8"`，`SU_USER = "user_ftp"`，
-     且 `su user_ftp` 的密码**就是** telnet 密码（`ROOT_PASSWORD = PASSWORD`）
+     且 `su user_ftp` 的密码**就是** telnet 密码（`TELNET.su_password` 跟随
+     `TELNET.password`，机型档案里 `su_password` 为空即表示「同上」）
 
 2. **获取 uboot 文件**
    - `tcboot.bin` 来自 **NWRT**——是 nwrt 专门为这款光猫开发的 tcboot
    - 网站地址：https://nwrt.kuroneko.host/
    - 刷完 tcboot 重启后，可以进 tcboot 换成更现代化的新 U-Boot：
-     - **一键换法（推荐）**：用 `--mode stock2ubi`（界面上的
-       「④ 运行 stock2ubi 刷 U-Boot」）。它会把
+     - **一键换法（推荐）**：用 `--mode stock2ubi`（界面上是刷机区里的
+       「方式 2：运行 stock2ubi 刷 U-Boot」，不用勾「我了解风险」那个确认框）。它会把
        [an758x-stock2ubi](https://github.com/pbs05/an758x-stock2ubi)
        上传到光猫后台跑起来，再打开它的网页，在里面备份分区、上传
        `preloader.bin`（别用 `firstblock.bin`）和

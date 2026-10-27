@@ -91,6 +91,11 @@ datas = [
     # 设备颗粒是否匹配。漏了它不会崩（flash.py 有 try/except 兜底），但华邦
     # 机型那道闸会**静默失效** —— 这比崩了更糟，所以这里必须带上。
     ("nandcheck.py", "."),
+    # device.py 是机型/凭据/端口这些「每台机器不一样的量」的归属地（2026-10 重构：
+    # 以前是 flash.py 里一堆模块级 global，GUI 走 run_flow() 时没人灌 → 贝尔机型
+    # 拿着空账号去逐个试）。flash.py 和 gui.py 都 import 它，静态分析能看到，
+    # 但 flash.py 本身也是 datas 动态加载的，所以这里照样列一条。
+    ("device.py", "."),
 ]
 # tcboot.bin 是可选的：存在就一起打包，作为「找不到外部文件」时的兜底
 if os.path.isfile("tcboot.bin"):
@@ -166,6 +171,8 @@ FLASH_HIDDEN = [
     # 救砖 tab 是直接从磁盘加载 ttl_rescue.py 的，光靠这里编译进去不够。）
     "ttl_rescue",
     "nandcheck",
+    # 机型/凭据状态（flash.py 与 gui.py 都 import 它）
+    "device",
 ]
 
 a = Analysis(
