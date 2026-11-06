@@ -345,8 +345,18 @@ class TelnetAuth:
         return out or [self.su_password or self.password]
 
     def su_target(self, profile):
-        """su 的目标账号（机型固定值优先）。"""
-        return profile.su_user or self.su_user
+        """su 的目标账号：**界面 / 配置里填的优先**，没填才用机型固定值。
+
+        历史 bug（2026-11 用户反馈）：这里原来写的是 ``profile.su_user or self.su_user``
+        —— 机型固定值挡在前面，于是用户把提权账号改成 ``useradmin`` /
+        ``useradmin_ftp`` 也会被忽略，永远拿机型默认的 ``user_ftp`` 去 su。
+        """
+        user = (self.su_user or "").strip() or (profile.su_user or "").strip()
+        if not user:
+            # 兜底：贝尔的约定是「铭牌账号_ftp」
+            base = (profile.telnet_user or self.username or "user").strip()
+            user = base + "_ftp"
+        return user
 
     def describe(self, profile):
         user = profile.telnet_user or self.username

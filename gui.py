@@ -472,7 +472,8 @@ class App:
             ("telnet", "password", "铭牌用户密码", False,
              "光猫底部铭牌上的用户密码；telnet 登录用它"),
             ("telnet", "su_user", "提权账号（su）", False,
-             "自动填成「铭牌用户账号_ftp」，即拿到 root 的账号"),
+             "自动填「铭牌用户账号_ftp」；手工填了就以你填的为准"
+             "（如 useradmin、useradmin_ftp），不填才用该机型的默认值"),
             ("telnet", "root_password", "提权密码（留空=同上）", False,
              "留空表示与「铭牌用户密码」相同"),
             ("super", "username", "网页超级账号", False,
